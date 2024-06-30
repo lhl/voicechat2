@@ -5,7 +5,7 @@ from fastapi.staticfiles import StaticFiles
 from llama_cpp import Llama
 from TTS.api import TTS
 import numpy as np
-from scipy.io.wavfile import write
+from scipy.io.wavfile import write, read
 import whisperx
 import asyncio
 import io
@@ -16,9 +16,10 @@ import tempfile
 import time
 import json
 import uuid
+import opuslib
 
 app = FastAPI()
-app.mount("/ui", StaticFiles(directory="static"), name="static")
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Load models
 print("Loading SRT...")
@@ -65,8 +66,12 @@ class ConversationManager:
 conversation_manager = ConversationManager()
 
 async def transcribe_audio(audio_data):
+    # Decode Opus to PCM
+    opus_decoder = opuslib.Decoder(48000, 1)
+    pcm_data = opus_decoder.decode(audio_data)
+
     with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_file:
-        temp_file.write(audio_data)
+        write(temp_file.name, 48000, np.frombuffer(pcm_data, dtype=np.int16))
         temp_file.close()
 
         loop = asyncio.get_event_loop()
@@ -180,15 +185,16 @@ async def tts_generate_and_send(websocket: WebSocket, sentence, speaker):
 
     wav_np = np.array(wav_np)
     wav_np_int16 = np.int16(wav_np * 32767)
-    wav_bytes = io.BytesIO()
-    write(wav_bytes, 22050, wav_np_int16)
-    wav_bytes.seek(0)
+    
+    # Encode to Opus
+    opus_encoder = opuslib.Encoder(48000, 1, opuslib.APPLICATION_AUDIO)
+    opus_data = opus_encoder.encode(wav_np_int16.tobytes())
 
-    await websocket.send_bytes(wav_bytes.read())
+    await websocket.send_bytes(opus_data)
 
 @app.get("/")
 def read_root():
-    return FileResponse("ui/index.html")
+    return FileResponse("static/index.html")
 
 if __name__ == "__main__":
     import uvicorn
