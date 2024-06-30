@@ -21,6 +21,8 @@
             padding: 2rem;
             border-radius: 8px;
             box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            max-width: 800px;
+            width: 100%;
         }
         button {
             font-size: 1rem;
@@ -28,22 +30,35 @@
             margin: 0.5rem;
             cursor: pointer;
         }
-        #status {
+        #status, #timer {
             margin-top: 1rem;
             font-weight: bold;
         }
         #audioPlayback {
             margin-top: 1rem;
         }
+        #logArea {
+            width: 100%;
+            height: 400px;
+            margin-top: 1rem;
+            padding: 0.5rem;
+            border: 1px solid #ccc;
+            overflow-y: auto;
+            text-align: left;
+            font-family: monospace;
+            font-size: 0.9rem;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>AI Voice Recorder</h1>
+        <div id="timer">00:00:000</div>
         <button id="startButton">Start Recording</button>
         <button id="stopButton" disabled>Stop Recording</button>
         <div id="status">Ready</div>
         <div id="audioPlayback"></div>
+        <div id="logArea"></div>
     </div>
 
     <script>
@@ -51,11 +66,17 @@
         const stopButton = document.getElementById('stopButton');
         const status = document.getElementById('status');
         const audioPlayback = document.getElementById('audioPlayback');
+        const logArea = document.getElementById('logArea');
+        const timerDisplay = document.getElementById('timer');
 
         let recorder;
         let socket;
         let isTestMode = true; // Set to true for test mode
         let recordedChunks = [];
+        let startTime;
+        let timerInterval;
+        let totalBytes = 0;
+        let lastResponseTime = 0;
 
         const config = {
             encoderPath: 'https://cdnjs.cloudflare.com/ajax/libs/opus-recorder/8.0.5/encoderWorker.min.js',
@@ -65,6 +86,19 @@
             encoderSampleRate: 16000,
             numberOfChannels: 1,
         };
+
+        function log(message) {
+            const timestamp = new Date().toISOString();
+            logArea.innerHTML = `${timestamp} - ${message}<br>` + logArea.innerHTML;
+        }
+
+        function updateTimer() {
+            const elapsed = new Date().getTime() - startTime;
+            const minutes = Math.floor(elapsed / 60000);
+            const seconds = Math.floor((elapsed % 60000) / 1000);
+            const milliseconds = elapsed % 1000;
+            timerDisplay.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}:${milliseconds.toString().padStart(3, '0')}`;
+        }
 
         function initializeRecorder() {
             if (!Recorder.isRecordingSupported()) {
@@ -79,12 +113,24 @@
                 startButton.disabled = true;
                 stopButton.disabled = false;
                 recordedChunks = [];
+                totalBytes = 0;
+                startTime = new Date().getTime();
+                timerInterval = setInterval(updateTimer, 10);
+                log('Recording started');
             };
 
             recorder.onstop = () => {
                 status.textContent = 'Recording stopped.';
                 startButton.disabled = false;
                 stopButton.disabled = true;
+                clearInterval(timerInterval);
+                
+                const endTime = new Date().getTime();
+                const duration = (endTime - startTime) / 1000; // in seconds
+                const sizeKB = totalBytes / 1024;
+                const bitrateKBps = sizeKB / duration;
+                
+                log(`Recording stopped. Duration: ${duration.toFixed(2)}s, Size: ${sizeKB.toFixed(2)}KB, Bitrate: ${bitrateKBps.toFixed(2)}KB/s`);
 
                 if (isTestMode) {
                     createAudioPlayback();
@@ -92,6 +138,8 @@
             };
 
             recorder.ondataavailable = (typedArray) => {
+                totalBytes += typedArray.byteLength;
+
                 if (isTestMode) {
                     recordedChunks.push(typedArray);
                 } else if (socket && socket.readyState === WebSocket.OPEN) {
@@ -104,6 +152,7 @@
             if (isTestMode) {
                 status.textContent = 'Test mode active. WebSocket not initialized.';
                 startButton.disabled = false;
+                log('Test mode active. WebSocket not initialized.');
                 return;
             }
 
@@ -113,12 +162,14 @@
                 socket.onopen = () => {
                     status.textContent = 'WebSocket connected.';
                     startButton.disabled = false;
+                    log('WebSocket connected');
                 };
 
                 socket.onclose = () => {
                     status.textContent = 'WebSocket disconnected.';
                     startButton.disabled = false;
                     stopButton.disabled = true;
+                    log('WebSocket disconnected');
                 };
 
                 socket.onerror = (error) => {
@@ -126,12 +177,21 @@
                     status.textContent = 'WebSocket error occurred. Switching to test mode.';
                     isTestMode = true;
                     startButton.disabled = false;
+                    log('WebSocket error occurred. Switched to test mode.');
+                };
+
+                socket.onmessage = (event) => {
+                    const currentTime = new Date().getTime();
+                    const latency = currentTime - lastResponseTime;
+                    log(`Response received. Latency: ${latency}ms`);
+                    lastResponseTime = currentTime;
                 };
             } catch (error) {
                 console.error('Error initializing WebSocket:', error);
                 status.textContent = 'Failed to initialize WebSocket. Switching to test mode.';
                 isTestMode = true;
                 startButton.disabled = false;
+                log('Failed to initialize WebSocket. Switched to test mode.');
             }
         }
 
@@ -146,6 +206,7 @@
             
             audioPlayback.innerHTML = '';
             audioPlayback.appendChild(playButton);
+            log('Audio playback created');
         }
 
         startButton.onclick = () => {
@@ -154,6 +215,7 @@
                 .catch((error) => {
                     console.error('Error starting recording:', error);
                     status.textContent = 'Error starting recording.';
+                    log(`Error starting recording: ${error.message}`);
                 });
         };
 
@@ -165,6 +227,7 @@
         window.onload = () => {
             initializeRecorder();
             initializeWebSocket();
+            log('Application initialized');
         };
     </script>
 </body>
