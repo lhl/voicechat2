@@ -1,45 +1,26 @@
-from collections import deque
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, StreamingResponse
-from fastapi.staticfiles import StaticFiles
-from llama_cpp import Llama
-from TTS.api import TTS
-import numpy as np
-from scipy.io.wavfile import write, read
-import whisperx
 import asyncio
-import io
-import logging
+import aiohttp
+import json
 import os
 import re
 import tempfile
 import time
-import json
 import uuid
+from collections import deque
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+import numpy as np
+from scipy.io.wavfile import write
 import opuslib
+
+# External endpoints
+SRT_ENDPOINT = os.getenv("SRT_ENDPOINT", "http://localhost:8001/transcribe")
+LLM_ENDPOINT = os.getenv("LLM_ENDPOINT", "http://localhost:8002/v1/chat/completions")
+TTS_ENDPOINT = os.getenv("TTS_ENDPOINT", "http://localhost:8003/tts")
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
-
-# Load models
-print("Loading SRT...")
-t0 = time.time()
-whisperx_model = whisperx.load_model("large-v2", "cuda", compute_type="float16", language="en")
-elapsed = time.time() - t0
-print(f"Loaded SRT in {elapsed:.2f}s")
-
-print("Loading LLM...")
-t0 = time.time()
-llama_model = Llama(model_path="/models/llm/nouse-hermes-llama2/ggml-Hermes-2-step2559-q4_K_M.bin", n_ctx=4096, n_gpu_layers=99)
-elapsed = time.time() - t0
-print(f"Loaded LLM in {elapsed:.2f}s")
-
-print('Loading vits...')
-t0 = time.time()
-vits_model = 'tts_models/en/vctk/vits'
-tts_vits = TTS(vits_model, gpu=True)
-elapsed = time.time() - t0
-print(f"Loaded TTS in {elapsed:.2f}s")
 
 class ConversationManager:
     def __init__(self):
@@ -60,7 +41,7 @@ class ConversationManager:
         self.sessions[session_id]["current_turn"] += 1
 
     def add_ai_message(self, session_id, message):
-        self.sessions[session_id]["conversation"].append({"role": "ai", "content": message})
+        self.sessions[session_id]["conversation"].append({"role": "assistant", "content": message})
         self.sessions[session_id]["current_turn"] += 1
 
 conversation_manager = ConversationManager()
@@ -74,13 +55,12 @@ async def transcribe_audio(audio_data):
         write(temp_file.name, 48000, np.frombuffer(pcm_data, dtype=np.int16))
         temp_file.close()
 
-        loop = asyncio.get_event_loop()
-        audio = await loop.run_in_executor(None, whisperx.load_audio, temp_file.name)
-        result = await loop.run_in_executor(None, whisperx_model.transcribe, audio, 16)
+        async with aiohttp.ClientSession() as session:
+            async with session.post(SRT_ENDPOINT, data={'audio': open(temp_file.name, 'rb')}) as response:
+                result = await response.json()
 
-        text = " ".join([s["text"] for s in result["segments"]])
         os.unlink(temp_file.name)
-        return text
+        return result['text']
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -110,43 +90,39 @@ async def websocket_endpoint(websocket: WebSocket):
 async def process_and_stream(websocket: WebSocket, session_id, text):
     try:
         # LLM processing
-        await generate_llm_response(session_id, text)
+        await generate_llm_response(websocket, session_id, text)
         
         # TTS processing and streaming
         await generate_and_stream_tts(websocket, session_id)
     finally:
         conversation_manager.sessions[session_id]["is_processing"] = False
 
-async def generate_llm_response(session_id, text):
-    prompt = f"""### Instruction:
-{text}
+async def generate_llm_response(websocket: WebSocket, session_id, text):
+    conversation = conversation_manager.sessions[session_id]["conversation"]
+    
+    async with aiohttp.ClientSession() as session:
+        async with session.post(LLM_ENDPOINT, json={
+            "messages": conversation,
+            "stream": True
+        }) as response:
+            async for line in response.content:
+                if line:
+                    try:
+                        data = json.loads(line.decode('utf-8').split('data: ')[1])
+                        if 'choices' in data and len(data['choices']) > 0:
+                            content = data['choices'][0]['delta'].get('content', '')
+                            if content:
+                                await process_llm_content(websocket, session_id, content)
+                    except json.JSONDecodeError:
+                        pass  # Ignore non-JSON lines
 
-### Input:
-This is part of a text-to-speech conversation so please keep answers shorter and in a way that makes sense when spoken aloud in a dialogue.
-
-### Response:
-"""
-    current_buffer = ""
-    for token in llama_model.create_completion(prompt,
-                                               max_tokens = 1000,
-                                               temperature = 0.8,
-                                               top_p = 0.95,
-                                               stop=["### Instruction:"],
-                                               stream = True):
-        current_buffer += token['choices'][0]['text']
-        print(token['choices'][0]['text'], end='')
-
-        sentences = re.split(r'(?<=[.!?])\s+', current_buffer)
-        if len(sentences) > 1:
-            sentence = process_sentence(sentences[0])
-            conversation_manager.sessions[session_id]["llm_output_sentences"].append(sentence)
-            current_buffer = sentences[1]
-
-        if token['choices'][0]['finish_reason']:
-            if current_buffer.strip():
-                sentence = process_sentence(current_buffer.strip())
-                conversation_manager.sessions[session_id]["llm_output_sentences"].append(sentence)
-            conversation_manager.sessions[session_id]["llm_output_sentences"].append("<<STOP>>")
+async def process_llm_content(websocket: WebSocket, session_id, content):
+    sentences = re.split(r'(?<=[.!?])\s+', content)
+    for sentence in sentences:
+        if sentence:
+            processed_sentence = process_sentence(sentence)
+            conversation_manager.sessions[session_id]["llm_output_sentences"].append(processed_sentence)
+            conversation_manager.add_ai_message(session_id, processed_sentence)
 
 def process_sentence(sentence):
     sentence = re.sub(r'~+', '!', sentence)
@@ -156,39 +132,21 @@ def process_sentence(sentence):
     return sentence.strip()
 
 async def generate_and_stream_tts(websocket: WebSocket, session_id):
-    speaker = 'p273'
     llm_output_sentences = conversation_manager.sessions[session_id]["llm_output_sentences"]
     
-    while True:
-        if len(llm_output_sentences) > 0:
-            sentence = ""
+    while llm_output_sentences:
+        sentence = llm_output_sentences.popleft()
+        if sentence:
+            await tts_generate_and_send(websocket, sentence)
 
-            while len(sentence) < 25 and llm_output_sentences:
-                new_sentence = llm_output_sentences.popleft()
-                if new_sentence == '<<STOP>>':
-                    if sentence:
-                        await tts_generate_and_send(websocket, sentence, speaker)
-                    return
-                else:
-                    sentence += " " + new_sentence
+async def tts_generate_and_send(websocket: WebSocket, sentence):
+    async with aiohttp.ClientSession() as session:
+        async with session.post(TTS_ENDPOINT, json={"text": sentence}) as response:
+            audio_data = await response.read()
 
-            if sentence:
-                await tts_generate_and_send(websocket, sentence, speaker)
-        else:
-            await asyncio.sleep(0.1)
-
-async def tts_generate_and_send(websocket: WebSocket, sentence, speaker):
-    t0 = time.time()
-    wav_np = tts_vits.tts(sentence, speaker=speaker)
-    elapsed = time.time() - t0
-    print(f"Sentence '{sentence}' generated in {elapsed:.2f}s")
-
-    wav_np = np.array(wav_np)
-    wav_np_int16 = np.int16(wav_np * 32767)
-    
     # Encode to Opus
     opus_encoder = opuslib.Encoder(48000, 1, opuslib.APPLICATION_AUDIO)
-    opus_data = opus_encoder.encode(wav_np_int16.tobytes())
+    opus_data = opus_encoder.encode(audio_data)
 
     await websocket.send_bytes(opus_data)
 
