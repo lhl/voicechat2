@@ -10,17 +10,15 @@ from collections import deque
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-import numpy as np
-from scipy.io.wavfile import write
 import opuslib
 
 # External endpoints
-SRT_ENDPOINT = os.getenv("SRT_ENDPOINT", "http://localhost:8001/transcribe")
+SRT_ENDPOINT = os.getenv("SRT_ENDPOINT", "http://localhost:8080/inference")
 LLM_ENDPOINT = os.getenv("LLM_ENDPOINT", "http://localhost:8002/v1/chat/completions")
 TTS_ENDPOINT = os.getenv("TTS_ENDPOINT", "http://localhost:8003/tts")
 
 app = FastAPI()
-app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/ui", StaticFiles(directory="ui"), name="ui")
 
 class ConversationManager:
     def __init__(self):
@@ -46,21 +44,25 @@ class ConversationManager:
 
 conversation_manager = ConversationManager()
 
-async def transcribe_audio(audio_data):
-    # Decode Opus to PCM
-    opus_decoder = opuslib.Decoder(48000, 1)
-    pcm_data = opus_decoder.decode(audio_data)
+async def transcribe_audio(audio_data, session_id, turn_id):
+    temp_file_path = f"/tmp/{session_id}-{turn_id}.opus"
+    with open(temp_file_path, "wb") as temp_file:
+        temp_file.write(audio_data)
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_file:
-        write(temp_file.name, 48000, np.frombuffer(pcm_data, dtype=np.int16))
-        temp_file.close()
+    async with aiohttp.ClientSession() as session:
+        data = aiohttp.FormData()
+        data.add_field('file', open(temp_file_path, 'rb'), filename=f"{session_id}-{turn_id}.opus")
+        data.add_field('temperature', "0.0")
+        data.add_field('temperature_inc', "0.2")
+        data.add_field('response_format', "json")
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(SRT_ENDPOINT, data={'audio': open(temp_file.name, 'rb')}) as response:
-                result = await response.json()
+        async with session.post(SRT_ENDPOINT, data=data) as response:
+            result = await response.json()
 
-        os.unlink(temp_file.name)
-        return result['text']
+    # Optionally, you can remove the temporary file here if you don't need it for debugging
+    # os.remove(temp_file_path)
+
+    return result['text']
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -78,7 +80,8 @@ async def websocket_endpoint(websocket: WebSocket):
                 await websocket.send_json({"type": "interrupted"})
             else:
                 conversation_manager.sessions[session_id]["is_processing"] = True
-                text = await transcribe_audio(data)
+                turn_id = conversation_manager.sessions[session_id]["current_turn"]
+                text = await transcribe_audio(data, session_id, turn_id)
                 conversation_manager.add_user_message(session_id, text)
                 
                 # Start LLM and TTS processing
@@ -152,7 +155,7 @@ async def tts_generate_and_send(websocket: WebSocket, sentence):
 
 @app.get("/")
 def read_root():
-    return FileResponse("static/index.html")
+    return FileResponse("ui/index.html")
 
 if __name__ == "__main__":
     import uvicorn
