@@ -54,16 +54,14 @@
     <div class="container">
         <h1>AI Voice Recorder</h1>
         <div id="timer">00:00:000</div>
-        <button id="startButton">Start Recording</button>
-        <button id="stopButton" disabled>Stop Recording</button>
+        <button id="recordButton">Start Recording</button>
         <div id="status">Ready</div>
         <div id="audioPlayback"></div>
         <div id="logArea"></div>
     </div>
 
     <script>
-        const startButton = document.getElementById('startButton');
-        const stopButton = document.getElementById('stopButton');
+        const recordButton = document.getElementById('recordButton');
         const status = document.getElementById('status');
         const audioPlayback = document.getElementById('audioPlayback');
         const logArea = document.getElementById('logArea');
@@ -77,6 +75,12 @@
         let timerInterval;
         let totalBytes = 0;
         let lastResponseTime = 0;
+        let sessionId = null;
+        let turnId = 1;
+        let isRecording = false;
+        let isPlaying = false;
+        let playbackStartTime = 0;
+        let currentPlaybackDuration = 0;
 
         const config = {
             encoderPath: 'https://cdnjs.cloudflare.com/ajax/libs/opus-recorder/8.0.5/encoderWorker.min.js',
@@ -109,20 +113,25 @@
             recorder = new Recorder(config);
 
             recorder.onstart = () => {
+                isRecording = true;
                 status.textContent = 'Recording...';
-                startButton.disabled = true;
-                stopButton.disabled = false;
+                recordButton.textContent = 'Stop Recording';
                 recordedChunks = [];
                 totalBytes = 0;
                 startTime = new Date().getTime();
                 timerInterval = setInterval(updateTimer, 10);
-                log('Recording started');
+                log(`Recording started (Turn ${turnId})`);
+
+                if (isPlaying) {
+                    stopPlayback();
+                    log(`Playback interrupted at ${currentPlaybackDuration.toFixed(2)}s`);
+                }
             };
 
             recorder.onstop = () => {
+                isRecording = false;
                 status.textContent = 'Recording stopped.';
-                startButton.disabled = false;
-                stopButton.disabled = true;
+                recordButton.textContent = 'Start Recording';
                 clearInterval(timerInterval);
                 
                 const endTime = new Date().getTime();
@@ -130,29 +139,23 @@
                 const sizeKB = totalBytes / 1024;
                 const bitrateKBps = sizeKB / duration;
                 
-                log(`Recording stopped. Duration: ${duration.toFixed(2)}s, Size: ${sizeKB.toFixed(2)}KB, Bitrate: ${bitrateKBps.toFixed(2)}KB/s`);
+                log(`Recording stopped (Turn ${turnId}). Duration: ${duration.toFixed(2)}s, Size: ${sizeKB.toFixed(2)}KB, Bitrate: ${bitrateKBps.toFixed(2)}KB/s`);
 
-                if (isTestMode) {
-                    createAudioPlayback();
-                }
+                sendAudioToServer(startTime, endTime);
+                turnId += 2;
             };
 
             recorder.ondataavailable = (typedArray) => {
                 totalBytes += typedArray.byteLength;
-
-                if (isTestMode) {
-                    recordedChunks.push(typedArray);
-                } else if (socket && socket.readyState === WebSocket.OPEN) {
-                    socket.send(typedArray);
-                }
+                recordedChunks.push(typedArray);
             };
         }
 
         function initializeWebSocket() {
             if (isTestMode) {
+                sessionId = 'test-session-' + Date.now();
                 status.textContent = 'Test mode active. WebSocket not initialized.';
-                startButton.disabled = false;
-                log('Test mode active. WebSocket not initialized.');
+                log(`Test mode active. Session ID: ${sessionId}`);
                 return;
             }
 
@@ -160,15 +163,13 @@
                 socket = new WebSocket('ws://your-websocket-server-url');
 
                 socket.onopen = () => {
+                    sessionId = 'session-' + Date.now();
                     status.textContent = 'WebSocket connected.';
-                    startButton.disabled = false;
-                    log('WebSocket connected');
+                    log(`WebSocket connected. Session ID: ${sessionId}`);
                 };
 
                 socket.onclose = () => {
                     status.textContent = 'WebSocket disconnected.';
-                    startButton.disabled = false;
-                    stopButton.disabled = true;
                     log('WebSocket disconnected');
                 };
 
@@ -176,51 +177,90 @@
                     console.error('WebSocket error:', error);
                     status.textContent = 'WebSocket error occurred. Switching to test mode.';
                     isTestMode = true;
-                    startButton.disabled = false;
                     log('WebSocket error occurred. Switched to test mode.');
                 };
 
                 socket.onmessage = (event) => {
-                    const currentTime = new Date().getTime();
-                    const latency = currentTime - lastResponseTime;
-                    log(`Response received. Latency: ${latency}ms`);
-                    lastResponseTime = currentTime;
+                    handleServerResponse(JSON.parse(event.data));
                 };
             } catch (error) {
                 console.error('Error initializing WebSocket:', error);
                 status.textContent = 'Failed to initialize WebSocket. Switching to test mode.';
                 isTestMode = true;
-                startButton.disabled = false;
                 log('Failed to initialize WebSocket. Switched to test mode.');
             }
         }
 
-        function createAudioPlayback() {
+        function sendAudioToServer(startTime, endTime) {
             const blob = new Blob(recordedChunks, { type: 'audio/ogg' });
-            const audioURL = URL.createObjectURL(blob);
-            const audio = new Audio(audioURL);
-            
-            const playButton = document.createElement('button');
-            playButton.textContent = 'Play Recording';
-            playButton.onclick = () => audio.play();
-            
-            audioPlayback.innerHTML = '';
-            audioPlayback.appendChild(playButton);
-            log('Audio playback created');
+            const metadata = {
+                sessionId: sessionId,
+                turnId: turnId,
+                startTime: startTime,
+                endTime: endTime
+            };
+
+            if (isTestMode) {
+                // Simulate server processing and response
+                setTimeout(() => {
+                    const simulatedResponse = {
+                        text: "This is a simulated response from the AI.",
+                        audio: blob, // In real implementation, this would be the TTS audio
+                        duration: 3000 // Simulated 3-second response
+                    };
+                    handleServerResponse(simulatedResponse);
+                }, 1000); // Simulate 1-second processing time
+            } else {
+                // Here you would send the audio blob and metadata to the server via WebSocket
+                // socket.send(JSON.stringify({ metadata: metadata, audio: blob }));
+            }
+
+            log(`Audio sent to server. Turn ID: ${turnId}, Start: ${startTime}, End: ${endTime}`);
         }
 
-        startButton.onclick = () => {
-            recorder.start()
-                .then(() => console.log('Recording started'))
-                .catch((error) => {
-                    console.error('Error starting recording:', error);
-                    status.textContent = 'Error starting recording.';
-                    log(`Error starting recording: ${error.message}`);
-                });
-        };
+        function handleServerResponse(response) {
+            log(`Received response from server. Duration: ${response.duration}ms`);
+            playServerResponse(response.audio, response.duration);
+        }
 
-        stopButton.onclick = () => {
-            recorder.stop();
+        function playServerResponse(audioBlob, duration) {
+            const audio = new Audio(URL.createObjectURL(audioBlob));
+            
+            audio.onplay = () => {
+                isPlaying = true;
+                playbackStartTime = Date.now();
+                log('Started playing server response');
+            };
+
+            audio.onended = () => {
+                isPlaying = false;
+                log(`Finished playing server response. Duration: ${duration}ms`);
+            };
+
+            audio.play();
+        }
+
+        function stopPlayback() {
+            if (isPlaying) {
+                // In a real implementation, you would stop the audio playback here
+                isPlaying = false;
+                currentPlaybackDuration = (Date.now() - playbackStartTime) / 1000;
+                log(`Playback stopped at ${currentPlaybackDuration.toFixed(2)}s`);
+            }
+        }
+
+        recordButton.onclick = () => {
+            if (isRecording) {
+                recorder.stop();
+            } else {
+                recorder.start()
+                    .then(() => console.log('Recording started'))
+                    .catch((error) => {
+                        console.error('Error starting recording:', error);
+                        status.textContent = 'Error starting recording.';
+                        log(`Error starting recording: ${error.message}`);
+                    });
+            }
         };
 
         // Initialize recorder and WebSocket when the page loads
