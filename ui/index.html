@@ -76,7 +76,6 @@
         let startTime;
         let timerInterval;
         let totalBytes = 0;
-        let lastResponseTime = 0;
         let sessionId = null;
         let turnId = 1;
         let isRecording = false;
@@ -84,6 +83,7 @@
         let playbackStartTime = 0;
         let currentPlaybackDuration = 0;
         let stopRecordingTimeout;
+        let recordingEndTime;
         const recordingBufferTime = 100; // 100ms buffer at the end of recording
 
         const config = {
@@ -101,7 +101,7 @@
         }
 
         function updateTimer() {
-            const elapsed = new Date().getTime() - startTime;
+            const elapsed = Date.now() - startTime;
             const minutes = Math.floor(elapsed / 60000);
             const seconds = Math.floor((elapsed % 60000) / 1000);
             const milliseconds = elapsed % 1000;
@@ -122,7 +122,7 @@
                 recordButton.textContent = 'Stop Recording';
                 recordedChunks = [];
                 totalBytes = 0;
-                startTime = new Date().getTime();
+                startTime = Date.now();
                 timerInterval = setInterval(updateTimer, 10);
                 log(`Recording started (Turn ${turnId})`);
 
@@ -139,14 +139,14 @@
                 recordButton.disabled = true;
                 clearInterval(timerInterval);
                 
-                const endTime = new Date().getTime();
-                const duration = (endTime - startTime) / 1000; // in seconds
+                recordingEndTime = Date.now();
+                const duration = (recordingEndTime - startTime) / 1000; // in seconds
                 const sizeKB = totalBytes / 1024;
                 const bitrateKBps = sizeKB / duration;
                 
                 log(`Recording stopped (Turn ${turnId}). Duration: ${duration.toFixed(2)}s, Size: ${sizeKB.toFixed(2)}KB, Bitrate: ${bitrateKBps.toFixed(2)}KB/s`);
 
-                sendAudioToServer(startTime, endTime);
+                sendAudioToServer(startTime, recordingEndTime);
                 turnId += 2;
             };
 
@@ -224,11 +224,10 @@
         }
 
         function handleServerResponse(response) {
-            const responseLatency = Date.now() - lastResponseTime;
+            const responseLatency = Date.now() - recordingEndTime;
             latencyDisplay.textContent = `Response Latency: ${responseLatency.toFixed(2)}ms`;
             log(`Received response from server. Latency: ${responseLatency.toFixed(2)}ms, Duration: ${response.duration}ms`);
             playServerResponse(response.audio, response.duration);
-            lastResponseTime = Date.now();
             recordButton.disabled = false;
             status.textContent = 'Ready';
         }
@@ -239,7 +238,7 @@
             audio.onplay = () => {
                 isPlaying = true;
                 playbackStartTime = Date.now();
-                log('Started playing server response');
+                log(`Started playing server response. Total latency: ${(playbackStartTime - recordingEndTime).toFixed(2)}ms`);
             };
 
             audio.onended = () => {
