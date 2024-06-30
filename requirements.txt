@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+websockets
+llama-cpp-python
+TTS
+numpy
+scipy
+whisperx
+python-multipart
+opuslib
