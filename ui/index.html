@@ -30,7 +30,7 @@
             margin: 0.5rem;
             cursor: pointer;
         }
-        #status, #timer {
+        #status, #timer, #latency {
             margin-top: 1rem;
             font-weight: bold;
         }
@@ -54,6 +54,7 @@
     <div class="container">
         <h1>AI Voice Recorder</h1>
         <div id="timer">00:00:000</div>
+        <div id="latency">Response Latency: 0.00ms</div>
         <button id="recordButton">Start Recording</button>
         <div id="status">Ready</div>
         <div id="audioPlayback"></div>
@@ -66,6 +67,7 @@
         const audioPlayback = document.getElementById('audioPlayback');
         const logArea = document.getElementById('logArea');
         const timerDisplay = document.getElementById('timer');
+        const latencyDisplay = document.getElementById('latency');
 
         let recorder;
         let socket;
@@ -81,6 +83,8 @@
         let isPlaying = false;
         let playbackStartTime = 0;
         let currentPlaybackDuration = 0;
+        let stopRecordingTimeout;
+        const recordingBufferTime = 100; // 100ms buffer at the end of recording
 
         const config = {
             encoderPath: 'https://cdnjs.cloudflare.com/ajax/libs/opus-recorder/8.0.5/encoderWorker.min.js',
@@ -130,8 +134,9 @@
 
             recorder.onstop = () => {
                 isRecording = false;
-                status.textContent = 'Recording stopped.';
+                status.textContent = 'Processing...';
                 recordButton.textContent = 'Start Recording';
+                recordButton.disabled = true;
                 clearInterval(timerInterval);
                 
                 const endTime = new Date().getTime();
@@ -206,7 +211,7 @@
                     const simulatedResponse = {
                         text: "This is a simulated response from the AI.",
                         audio: blob, // In real implementation, this would be the TTS audio
-                        duration: 3000 // Simulated 3-second response
+                        duration: blob.size / 16 // Estimate duration based on file size (assuming 16KB/s)
                     };
                     handleServerResponse(simulatedResponse);
                 }, 1000); // Simulate 1-second processing time
@@ -219,8 +224,13 @@
         }
 
         function handleServerResponse(response) {
-            log(`Received response from server. Duration: ${response.duration}ms`);
+            const responseLatency = Date.now() - lastResponseTime;
+            latencyDisplay.textContent = `Response Latency: ${responseLatency.toFixed(2)}ms`;
+            log(`Received response from server. Latency: ${responseLatency.toFixed(2)}ms, Duration: ${response.duration}ms`);
             playServerResponse(response.audio, response.duration);
+            lastResponseTime = Date.now();
+            recordButton.disabled = false;
+            status.textContent = 'Ready';
         }
 
         function playServerResponse(audioBlob, duration) {
@@ -234,7 +244,8 @@
 
             audio.onended = () => {
                 isPlaying = false;
-                log(`Finished playing server response. Duration: ${duration}ms`);
+                currentPlaybackDuration = (Date.now() - playbackStartTime) / 1000;
+                log(`Finished playing server response. Actual duration: ${currentPlaybackDuration.toFixed(2)}s`);
             };
 
             audio.play();
@@ -251,7 +262,10 @@
 
         recordButton.onclick = () => {
             if (isRecording) {
-                recorder.stop();
+                clearTimeout(stopRecordingTimeout);
+                stopRecordingTimeout = setTimeout(() => {
+                    recorder.stop();
+                }, recordingBufferTime);
             } else {
                 recorder.start()
                     .then(() => console.log('Recording started'))
