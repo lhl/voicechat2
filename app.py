@@ -1,6 +1,7 @@
 import asyncio
 import aiohttp
 import json
+import logging
 import os
 import re
 import tempfile
@@ -11,11 +12,15 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 import opuslib
+import numpy as np
 
 # External endpoints
-SRT_ENDPOINT = os.getenv("SRT_ENDPOINT", "http://localhost:8080/inference")
+SRT_ENDPOINT = os.getenv("SRT_ENDPOINT", "http://localhost:8001/inference")
 LLM_ENDPOINT = os.getenv("LLM_ENDPOINT", "http://localhost:8002/v1/chat/completions")
 TTS_ENDPOINT = os.getenv("TTS_ENDPOINT", "http://localhost:8003/tts")
+
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 app.mount("/ui", StaticFiles(directory="ui"), name="ui")
@@ -64,6 +69,7 @@ async def transcribe_audio(audio_data, session_id, turn_id):
 
     return result['text']
 
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
@@ -81,14 +87,27 @@ async def websocket_endpoint(websocket: WebSocket):
             else:
                 conversation_manager.sessions[session_id]["is_processing"] = True
                 turn_id = conversation_manager.sessions[session_id]["current_turn"]
-                text = await transcribe_audio(data, session_id, turn_id)
-                conversation_manager.add_user_message(session_id, text)
-                
-                # Start LLM and TTS processing
-                asyncio.create_task(process_and_stream(websocket, session_id, text))
+                try:
+                    text = await transcribe_audio(data, session_id, turn_id)
+                    conversation_manager.add_user_message(session_id, text)
+                    
+                    # Start LLM and TTS processing
+                    await process_and_stream(websocket, session_id, text)
+                    
+                    # Signal end of processing
+                    await websocket.send_json({"type": "processing_complete"})
+                except Exception as e:
+                    logger.error(f"Error during processing: {str(e)}")
+                    await websocket.send_json({"type": "error", "message": str(e)})
+                finally:
+                    conversation_manager.sessions[session_id]["is_processing"] = False
     
     except WebSocketDisconnect:
-        print(f"WebSocket disconnected for session {session_id}")
+        logger.info(f"WebSocket disconnected for session {session_id}")
+    except Exception as e:
+        logger.error(f"Unexpected error in WebSocket endpoint: {str(e)}")
+        await websocket.close(code=1011, reason=str(e))
+
 
 async def process_and_stream(websocket: WebSocket, session_id, text):
     try:
@@ -100,32 +119,48 @@ async def process_and_stream(websocket: WebSocket, session_id, text):
     finally:
         conversation_manager.sessions[session_id]["is_processing"] = False
 
-async def generate_llm_response(websocket: WebSocket, session_id, text):
+async def generate_llm_response(websocket, session_id, text):
     conversation = conversation_manager.sessions[session_id]["conversation"]
     
     async with aiohttp.ClientSession() as session:
         async with session.post(LLM_ENDPOINT, json={
-            "messages": conversation,
+            "model": "gpt-3.5-turbo",  # This might be ignored by llama.cpp
+            "messages": conversation + [{"role": "user", "content": text}],
             "stream": True
         }) as response:
+            logger.debug(f"LLM response status: {response.status}")
             async for line in response.content:
+                logger.debug(f"Raw line: {line}")
                 if line:
                     try:
-                        data = json.loads(line.decode('utf-8').split('data: ')[1])
-                        if 'choices' in data and len(data['choices']) > 0:
-                            content = data['choices'][0]['delta'].get('content', '')
-                            if content:
-                                await process_llm_content(websocket, session_id, content)
+                        line_text = line.decode('utf-8').strip()
+                        if line_text.startswith('data: '):
+                            data_str = line_text[6:]  # Remove 'data: ' prefix
+                            if data_str.lower() == '[done]':
+                                logger.debug("Received [DONE] from LLM")
+                                break
+                            data = json.loads(data_str)
+                            logger.debug(f"Parsed data: {data}")
+                            if 'choices' in data and len(data['choices']) > 0:
+                                content = data['choices'][0]['delta'].get('content', '')
+                                if content:
+                                    await process_llm_content(websocket, session_id, content)
+                        else:
+                            logger.warning(f"Unexpected line format: {line_text}")
                     except json.JSONDecodeError:
-                        pass  # Ignore non-JSON lines
+                        logger.warning(f"Failed to parse JSON: {line_text}")
+                    except Exception as e:
+                        logger.error(f"Error processing line: {e}")
 
-async def process_llm_content(websocket: WebSocket, session_id, content):
+
+async def process_llm_content(websocket, session_id, content):
     sentences = re.split(r'(?<=[.!?])\s+', content)
     for sentence in sentences:
         if sentence:
             processed_sentence = process_sentence(sentence)
             conversation_manager.sessions[session_id]["llm_output_sentences"].append(processed_sentence)
             conversation_manager.add_ai_message(session_id, processed_sentence)
+            logger.debug(f"Processed sentence: {processed_sentence}")
 
 def process_sentence(sentence):
     sentence = re.sub(r'~+', '!', sentence)
@@ -142,16 +177,15 @@ async def generate_and_stream_tts(websocket: WebSocket, session_id):
         if sentence:
             await tts_generate_and_send(websocket, sentence)
 
+
 async def tts_generate_and_send(websocket: WebSocket, sentence):
     async with aiohttp.ClientSession() as session:
         async with session.post(TTS_ENDPOINT, json={"text": sentence}) as response:
-            audio_data = await response.read()
+            opus_data = await response.read()
 
-    # Encode to Opus
-    opus_encoder = opuslib.Encoder(48000, 1, opuslib.APPLICATION_AUDIO)
-    opus_data = opus_encoder.encode(audio_data)
-
+    # Send the Opus data directly
     await websocket.send_bytes(opus_data)
+
 
 @app.get("/")
 def read_root():
