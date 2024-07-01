@@ -1,58 +1,88 @@
 # voicechat2
 Local SRT/LLM/TTS Voicechat
 
-
 # Install
 These instructions are for Ubuntu LTS and assume you've [setup your ROCm](https://rocm.docs.amd.com/projects/install-on-linux/en/latest/tutorial/quick-start.html) or [CUDA](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/) already.
 
 I recommend you use [conda](https://docs.conda.io/en/latest/) or (my preferred), [mamba](https://mamba.readthedocs.io/en/latest/installation/mamba-installation.html) for environment management. It will make your life easier.
 
-System prereqs
+## System Prereqs
 ```
 sudo apt update
 
-# Not scrictly required but our run scripts use this for managing all the servers
-sudo apt install byobu
+# Not strictly required but helpers we use
+sudo apt install byobu curl wget
 
 # Audio processing
-sudo apt install espeak-ng ffmpeg libopus0 libopus-dev
+sudo apt install espeak-ng ffmpeg libopus0 libopus-dev 
 ```
 
-Then our python
+## Checkout code 
 ```
 # Create env
 mamba create -y -n voicechat2 python=3.11
 
 # Setup
 git clone https://github.com/lhl/voicechat2
+cd voicechat2
+pip install -r requirements.txt
+```
 
+## whisper.cpp
+```
+# Build whisper.cpp
+git clone https://github.com/ggerganov/whisper.cpp
+cd whisper.cpp
+GGML_HIPBLAS=1 make -j # AMD version
+
+# Get model - large-v2 is 3094 MB
+bash ./models/download-ggml-model.sh large-v2
+# Quantized version - large-v2-q5_0 is  1080MB
+# bash ./models/download-ggml-model.sh large-v2-q5_0
+
+# If you're going to go to the next instruction
+cd ..
+```
+
+## llama.cpp
+```
+# Build llama.cpp
+git clone https://github.com/ggerganov/llama.cpp
+cd llama.cpp
+make LLAMA_HIPBLAS=1 # AMD version
+
+# Grab your preferred GGUF model
+wget https://huggingface.co/bartowski/Meta-Llama-3-8B-Instruct-GGUF/resolve/main/Meta-Llama-3-8B-Instruct-Q4_K_M.gguf
+
+# If you're going to go to the next instruction
+cd ..
+```
+
+## StyleTTS2
+```
+git clone https://github.com/yl4579/StyleTTS2.git
+cd StyleTTS2
+pip install -r requirements.txt
+pip install phonemizer
+
+# Download the LJSpeech Model
+# https://huggingface.co/yl4579/StyleTTS2-LJSpeech/tree/main
+# https://huggingface.co/yl4579/StyleTTS2-LibriTTS/tree/main
+pip install huggingface_hub
+huggingface-cli download --local-dir . yl4579/StyleTTS2-LJSpeech
+```
+
+We include some extra scripts for launching:
+```
+run-voicechat2.sh - on your GPU machine, tries to launch all servers
+remote-tunnel.sh - connect your GPU machine to a jump machine
+local-tunnel.sh - connect to the GPU machine via a jump machine
 ```
 
 
-```
-byobu
-ffmpeg
-espeak-ng
-```
-
-git@github.com:lhl/voicechat2.git
-
-- WebSocket/WebRTC
 
 
-```
-sudo apt install
-sudo apt install update
-sudo apt install libopus0 libopus-dev
-```
-
-```
-GGML_HIPBLAS=1 make -j
-```
-
-
-
-# Other Projects
+# Other Audio Projects
 
 - https://github.com/dnhkng/GlaDOS
 - https://github.com/LAION-AI/natural_voice_assistant
