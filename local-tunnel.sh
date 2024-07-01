@@ -1,7 +1,7 @@
 #!/bin/bash
 
 ###
-# This script is used if you want to connect to your home network GPU via a jump server
+# Run this on your client machine if you want to connect to acess your GPU machine (already running remote-tunnel.sh) via your jump server
 ###
 
 # Replace these with your actual values
