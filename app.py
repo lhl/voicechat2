@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 import opuslib
 import numpy as np
+import traceback
 
 # External endpoints
 SRT_ENDPOINT = os.getenv("SRT_ENDPOINT", "http://localhost:8001/inference")
@@ -50,25 +51,33 @@ class ConversationManager:
 conversation_manager = ConversationManager()
 
 async def transcribe_audio(audio_data, session_id, turn_id):
-    temp_file_path = f"/tmp/{session_id}-{turn_id}.opus"
-    with open(temp_file_path, "wb") as temp_file:
-        temp_file.write(audio_data)
+    try:
+        temp_file_path = f"/tmp/{session_id}-{turn_id}.opus"
+        with open(temp_file_path, "wb") as temp_file:
+            temp_file.write(audio_data)
 
-    async with aiohttp.ClientSession() as session:
-        data = aiohttp.FormData()
-        data.add_field('file', open(temp_file_path, 'rb'), filename=f"{session_id}-{turn_id}.opus")
-        data.add_field('temperature', "0.0")
-        data.add_field('temperature_inc', "0.2")
-        data.add_field('response_format', "json")
+        # Add a small delay to ensure the file is fully written
+        await asyncio.sleep(0.1)
 
-        async with session.post(SRT_ENDPOINT, data=data) as response:
-            result = await response.json()
+        async with aiohttp.ClientSession() as session:
+            data = aiohttp.FormData()
+            data.add_field('file', open(temp_file_path, 'rb'), filename=f"/tmp/{session_id}-{turn_id}.opus")
+            data.add_field('temperature', "0.0")
+            data.add_field('temperature_inc', "0.2")
+            data.add_field('response_format', "json")
 
-    # Optionally, you can remove the temporary file here if you don't need it for debugging
-    # os.remove(temp_file_path)
+            async with session.post(SRT_ENDPOINT, data=data) as response:
+                result = await response.json()
 
-    return result['text']
+        # Optionally, you can remove the temporary file here if you don't need it for debugging
+        # os.remove(temp_file_path)
 
+        logger.debug(result)
+        return result['text']
+    except Exception as e:
+        logger.error(f"Transcription error: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -89,6 +98,8 @@ async def websocket_endpoint(websocket: WebSocket):
                 turn_id = conversation_manager.sessions[session_id]["current_turn"]
                 try:
                     text = await transcribe_audio(data, session_id, turn_id)
+                    if not text:
+                        raise ValueError("Transcription resulted in empty text")
                     conversation_manager.add_user_message(session_id, text)
                     
                     # Start LLM and TTS processing
@@ -98,6 +109,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     await websocket.send_json({"type": "processing_complete"})
                 except Exception as e:
                     logger.error(f"Error during processing: {str(e)}")
+                    logger.error(traceback.format_exc())
                     await websocket.send_json({"type": "error", "message": str(e)})
                 finally:
                     conversation_manager.sessions[session_id]["is_processing"] = False
@@ -106,6 +118,7 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.info(f"WebSocket disconnected for session {session_id}")
     except Exception as e:
         logger.error(f"Unexpected error in WebSocket endpoint: {str(e)}")
+        logger.error(traceback.format_exc())
         await websocket.close(code=1011, reason=str(e))
 
 
@@ -120,37 +133,42 @@ async def process_and_stream(websocket: WebSocket, session_id, text):
         conversation_manager.sessions[session_id]["is_processing"] = False
 
 async def generate_llm_response(websocket, session_id, text):
-    conversation = conversation_manager.sessions[session_id]["conversation"]
-    
-    async with aiohttp.ClientSession() as session:
-        async with session.post(LLM_ENDPOINT, json={
-            "model": "gpt-3.5-turbo",  # This might be ignored by llama.cpp
-            "messages": conversation + [{"role": "user", "content": text}],
-            "stream": True
-        }) as response:
-            logger.debug(f"LLM response status: {response.status}")
-            async for line in response.content:
-                logger.debug(f"Raw line: {line}")
-                if line:
-                    try:
-                        line_text = line.decode('utf-8').strip()
-                        if line_text.startswith('data: '):
-                            data_str = line_text[6:]  # Remove 'data: ' prefix
-                            if data_str.lower() == '[done]':
-                                logger.debug("Received [DONE] from LLM")
-                                break
-                            data = json.loads(data_str)
-                            logger.debug(f"Parsed data: {data}")
-                            if 'choices' in data and len(data['choices']) > 0:
-                                content = data['choices'][0]['delta'].get('content', '')
-                                if content:
-                                    await process_llm_content(websocket, session_id, content)
-                        else:
-                            logger.warning(f"Unexpected line format: {line_text}")
-                    except json.JSONDecodeError:
-                        logger.warning(f"Failed to parse JSON: {line_text}")
-                    except Exception as e:
-                        logger.error(f"Error processing line: {e}")
+    try:
+        conversation = conversation_manager.sessions[session_id]["conversation"]
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.post(LLM_ENDPOINT, json={
+                "model": "gpt-3.5-turbo",  # This might be ignored by llama.cpp
+                "messages": conversation + [{"role": "user", "content": text}],
+                "stream": True
+            }) as response:
+                logger.debug(f"LLM response status: {response.status}")
+                async for line in response.content:
+                    logger.debug(f"Raw line: {line}")
+                    if line:
+                        try:
+                            line_text = line.decode('utf-8').strip()
+                            if line_text.startswith('data: '):
+                                data_str = line_text[6:]  # Remove 'data: ' prefix
+                                if data_str.lower() == '[done]':
+                                    logger.debug("Received [DONE] from LLM")
+                                    break
+                                data = json.loads(data_str)
+                                logger.debug(f"Parsed data: {data}")
+                                if 'choices' in data and len(data['choices']) > 0:
+                                    content = data['choices'][0]['delta'].get('content', '')
+                                    if content:
+                                        await process_llm_content(websocket, session_id, content)
+                            else:
+                                logger.warning(f"Unexpected line format: {line_text}")
+                        except json.JSONDecodeError:
+                            logger.warning(f"Failed to parse JSON: {line_text}")
+                        except Exception as e:
+                            logger.error(f"Error processing line: {e}")
+    except Exception as e:
+        logger.error(f"LLM error: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise
 
 
 async def process_llm_content(websocket, session_id, content):
