@@ -27,28 +27,50 @@ logger = logging.getLogger(__name__)
 app = FastAPI()
 app.mount("/ui", StaticFiles(directory="ui"), name="ui")
 
+SYSTEM = {
+    "role": "system",
+    "content": "You are a helpful assistant. We are interacting via voice so keep responses concise, no more than to a couple sentences unless the user specifies a longer response."
+}
+
 class ConversationManager:
     def __init__(self):
         self.sessions = {}
+        self.session_timeout = 3600  # 1 hour timeout for sessions
 
     def create_session(self):
         session_id = str(uuid.uuid4())
         self.sessions[session_id] = {
-            "conversation": [],
+            "conversation": [SYSTEM],
             "llm_output_sentences": deque(),
             "current_turn": 0,
             "is_processing": False,
-            "audio_buffer": b''  # New: Buffer to accumulate audio data
+            "audio_buffer": b'',  # New: Buffer to accumulate audio data
+            "last_activity": time.time()
         }
         return session_id
 
     def add_user_message(self, session_id, message):
         self.sessions[session_id]["conversation"].append({"role": "user", "content": message})
         self.sessions[session_id]["current_turn"] += 1
+        self.sessions[session_id]["last_activity"] = time.time()
 
     def add_ai_message(self, session_id, message):
         self.sessions[session_id]["conversation"].append({"role": "assistant", "content": message})
         self.sessions[session_id]["current_turn"] += 1
+        self.sessions[session_id]["last_activity"] = time.time()
+
+    def get_conversation(self, session_id):
+        return self.sessions[session_id]["conversation"]
+
+    def clean_old_sessions(self):
+        current_time = time.time()
+        sessions_to_remove = [
+            session_id for session_id, session_data in self.sessions.items()
+            if current_time - session_data["last_activity"] > self.session_timeout
+        ]
+        for session_id in sessions_to_remove:
+            del self.sessions[session_id]
+        logger.info(f"Cleaned up {len(sessions_to_remove)} old sessions")
 
     def add_to_audio_buffer(self, session_id, audio_data):
         self.sessions[session_id]["audio_buffer"] += audio_data
@@ -89,7 +111,6 @@ async def transcribe_audio(audio_data, session_id, turn_id):
         logger.error(traceback.format_exc())
         raise
 
-
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
@@ -99,21 +120,20 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         while True:
             message = await websocket.receive()
+            logger.debug(f"Received message: {message}")
             
             if 'bytes' in message:
-                # Accumulate audio data
-                audio_data = message["bytes"]
+                audio_data = message['bytes']
                 logger.debug(f"Received audio data. Size: {len(audio_data)} bytes")
-                conversation_manager.add_to_audio_buffer(session_id, audio_data)
+                conversation_manager.sessions[session_id]["audio_buffer"] = audio_data
             elif 'text' in message:
                 logger.debug(f"Received text message: {message['text']}")
                 try:
-                    data = json.loads(message["text"])
+                    data = json.loads(message['text'])
                     logger.debug(f"Parsed JSON data: {data}")
                     if data.get("action") == "stop_recording":
                         logger.info("Stop recording message received. Processing audio...")
                         if conversation_manager.sessions[session_id]["is_processing"]:
-                            # Handle interruption
                             logger.warning("Interrupting ongoing processing")
                             conversation_manager.sessions[session_id]["llm_output_sentences"].clear()
                             conversation_manager.sessions[session_id]["is_processing"] = False
@@ -122,7 +142,7 @@ async def websocket_endpoint(websocket: WebSocket):
                             conversation_manager.sessions[session_id]["is_processing"] = True
                             turn_id = conversation_manager.sessions[session_id]["current_turn"]
                             try:
-                                audio_data = conversation_manager.get_and_clear_audio_buffer(session_id)
+                                audio_data = conversation_manager.sessions[session_id]["audio_buffer"]
                                 logger.info(f"Processing audio data. Size: {len(audio_data)} bytes")
                                 text = await transcribe_audio(audio_data, session_id, turn_id)
                                 if not text:
@@ -130,10 +150,8 @@ async def websocket_endpoint(websocket: WebSocket):
                                 logger.info(f"Transcription result: {text}")
                                 conversation_manager.add_user_message(session_id, text)
                                 
-                                # Start LLM and TTS processing
                                 await process_and_stream(websocket, session_id, text)
                                 
-                                # Signal end of processing
                                 await websocket.send_json({"type": "processing_complete"})
                             except Exception as e:
                                 logger.error(f"Error during processing: {str(e)}")
@@ -146,7 +164,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 except json.JSONDecodeError:
                     logger.error(f"Failed to parse JSON from text message: {message['text']}")
             else:
-                logger.warning(f"Received unexpected message type: {message['type']}")
+                logger.warning(f"Received message with unexpected format: {message}")
     
     except WebSocketDisconnect:
         logger.info(f"WebSocket disconnected for session {session_id}")
@@ -154,6 +172,7 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.error(f"Unexpected error in WebSocket endpoint: {str(e)}")
         logger.error(traceback.format_exc())
         await websocket.close(code=1011, reason=str(e))
+
 
 async def process_and_stream(websocket: WebSocket, session_id, text):
     try:
@@ -168,7 +187,7 @@ async def process_and_stream(websocket: WebSocket, session_id, text):
 
 async def generate_llm_response(websocket, session_id, text):
     try:
-        conversation = conversation_manager.sessions[session_id]["conversation"]
+        conversation = conversation_manager.get_conversation(session_id)
         
         async with aiohttp.ClientSession() as session:
             async with session.post(LLM_ENDPOINT, json={
@@ -203,7 +222,12 @@ async def generate_llm_response(websocket, session_id, text):
                 
                 # Send any remaining text
                 if accumulated_text:
+                    conversation_manager.sessions[session_id]["llm_output_sentences"].append(accumulated_text)
                     await generate_and_send_tts(websocket, accumulated_text)
+
+
+                conversation_manager.add_ai_message(session_id, "".join(conversation_manager.sessions[session_id]["llm_output_sentences"]))
+
     except Exception as e:
         logger.error(f"LLM error: {str(e)}")
         logger.error(traceback.format_exc())
@@ -253,6 +277,16 @@ async def tts_generate_and_send(websocket: WebSocket, sentence):
 @app.get("/")
 def read_root():
     return FileResponse("ui/index.html")
+
+# Run session cleanup periodically
+'''
+@app.on_event("startup")
+@app.on_event("shutdown")
+async def cleanup_sessions():
+    while True:
+        conversation_manager.clean_old_sessions()
+        await asyncio.sleep(3600)  # Run cleanup every hour
+'''
 
 if __name__ == "__main__":
     import uvicorn
