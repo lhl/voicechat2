@@ -73,6 +73,10 @@
         let audioStream;
         let mediaRecorder;
 
+        let socket;
+        let iceCandidatesQueue = [];
+        let isWebSocketReady = false;
+
         function log(message) {
             const timestamp = new Date().toISOString();
             logArea.innerHTML = `${timestamp} - ${message}<br>` + logArea.innerHTML;
@@ -86,65 +90,89 @@
             timerDisplay.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}:${milliseconds.toString().padStart(3, '0')}`;
         }
 
-        async function startSession() {
-            const configuration = {'iceServers': [{'urls': 'stun:stun.l.google.com:19302'}]};
-            peerConnection = new RTCPeerConnection(configuration);
-            
-            dataChannel = peerConnection.createDataChannel('chat');
-            dataChannel.onmessage = handleDataChannelMessage;
-            
-            peerConnection.onicecandidate = event => {
-                if (event.candidate) {
-                    sendToServer({
-                        type: 'ice-candidate',
-                        candidate: event.candidate
-                    });
-                }
-            };
-            
-            const offer = await peerConnection.createOffer();
-            await peerConnection.setLocalDescription(offer);
-            
-            sendToServer({
-                type: 'offer',
-                sdp: peerConnection.localDescription.sdp
+        function initializeWebSocket() {
+            return new Promise((resolve, reject) => {
+                socket = new WebSocket('ws://' + window.location.host + '/ws');
+                socket.onopen = () => {
+                    console.log('WebSocket connected');
+                    isWebSocketReady = true;
+                    resolve(socket);
+                };
+                socket.onerror = (error) => {
+                    console.error('WebSocket error:', error);
+                    reject(error);
+                };
+                socket.onmessage = handleServerMessage;
             });
-            
-            startButton.disabled = true;
-            recordButton.disabled = false;
-            status.textContent = 'Session started';
         }
 
-        async function startRecording() {
-            if (isRecording) {
-                mediaRecorder.stop();
-                isRecording = false;
-                recordButton.textContent = 'Start Recording';
-                clearInterval(timerInterval);
+        function sendToServer(data) {
+            if (isWebSocketReady) {
+                socket.send(JSON.stringify(data));
             } else {
-                try {
-                    audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                    audioStream.getTracks().forEach(track => peerConnection.addTrack(track, audioStream));
-                    
-                    const options = { mimeType: 'audio/webm;codecs=opus' };
-mediaRecorder = new MediaRecorder(audioStream, options);
-                    
-                    mediaRecorder.ondataavailable = event => {
-                        if (event.data.size > 0 && dataChannel.readyState === 'open') {
-                            dataChannel.send(event.data);
-                        }
-                    };
-                    
-                    mediaRecorder.start(1000); // Send data every 1 second
-                    isRecording = true;
-                    recordButton.textContent = 'Stop Recording';
-                    startTime = Date.now();
-                    timerInterval = setInterval(updateTimer, 10);
-                    status.textContent = 'Recording...';
-                } catch (err) {
-                    console.error('Error accessing microphone:', err);
-                    status.textContent = 'Error: ' + err.message;
+                console.warn('WebSocket not ready, queuing data');
+                iceCandidatesQueue.push(data);
+            }
+        }
+
+        async function startSession() {
+            try {
+                await initializeWebSocket();
+                
+                const configuration = {'iceServers': [{'urls': 'stun:stun.l.google.com:19302'}]};
+                peerConnection = new RTCPeerConnection(configuration);
+                
+                dataChannel = peerConnection.createDataChannel('chat');
+                dataChannel.onmessage = handleDataChannelMessage;
+                
+                peerConnection.onicecandidate = event => {
+                    if (event.candidate) {
+                        sendToServer({
+                            type: 'ice-candidate',
+                            candidate: event.candidate
+                        });
+                    }
+                };
+
+                peerConnection.oniceconnectionstatechange = () => {
+                    console.log("ICE connection state:", peerConnection.iceConnectionState);
+                };
+                
+                const offer = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offer);
+                
+                sendToServer({
+                    type: 'offer',
+                    sdp: peerConnection.localDescription.sdp
+                });
+                
+                // Send any queued ICE candidates
+                while (iceCandidatesQueue.length) {
+                    const candidate = iceCandidatesQueue.shift();
+                    sendToServer(candidate);
                 }
+                
+                startButton.disabled = true;
+                recordButton.disabled = false;
+                status.textContent = 'Session started';
+            } catch (error) {
+                console.error('Error starting session:', error);
+                status.textContent = 'Error: ' + error.message;
+            }
+        }
+
+        function handleServerMessage(event) {
+            const message = JSON.parse(event.data);
+            if (message.type === 'answer') {
+                const remoteDesc = new RTCSessionDescription({
+                    type: 'answer',
+                    sdp: message.sdp
+                });
+                peerConnection.setRemoteDescription(remoteDesc)
+                    .then(() => {
+                        console.log("Remote description set successfully");
+                    })
+                    .catch(error => console.error('Error setting remote description:', error));
             }
         }
 
@@ -174,88 +202,36 @@ mediaRecorder = new MediaRecorder(audioStream, options);
             }
         }
 
-        let socket;
-	let iceCandidatesQueue = [];
-
-	function initializeWebSocket() {
-            return new Promise((resolve, reject) => {
-                socket = new WebSocket('ws://' + window.location.host + '/ws');
-                socket.onopen = () => {
-                    console.log('WebSocket connected');
-                    resolve(socket);
-                };
-                socket.onerror = (error) => {
-                    console.error('WebSocket error:', error);
-                    reject(error);
-                };
-                socket.onmessage = handleServerMessage;
-            });
-        }
-
-	function sendToServer(data) {
-            if (socket && socket.readyState === WebSocket.OPEN) {
-                socket.send(JSON.stringify(data));
+        async function startRecording() {
+            if (isRecording) {
+                mediaRecorder.stop();
+                isRecording = false;
+                recordButton.textContent = 'Start Recording';
+                clearInterval(timerInterval);
             } else {
-                console.warn('WebSocket not ready, unable to send data');
-            }
-        }
-
-
-	async function startSession() {
-            try {
-                await initializeWebSocket();
-                
-                const configuration = {'iceServers': [{'urls': 'stun:stun.l.google.com:19302'}]};
-                peerConnection = new RTCPeerConnection(configuration);
-                
-                dataChannel = peerConnection.createDataChannel('chat');
-                dataChannel.onmessage = handleDataChannelMessage;
-                
-                peerConnection.onicecandidate = event => {
-                    if (event.candidate) {
-                        sendToServer({
-                            type: 'ice-candidate',
-                            candidate: event.candidate
-                        });
-                    }
-                };
-                
-                const offer = await peerConnection.createOffer();
-                await peerConnection.setLocalDescription(offer);
-                
-                sendToServer({
-                    type: 'offer',
-                    sdp: peerConnection.localDescription.sdp
-                });
-                
-                // Send any queued ICE candidates
-                while (iceCandidatesQueue.length) {
-                    const candidate = iceCandidatesQueue.shift();
-                    sendToServer({
-                        type: 'ice-candidate',
-                        candidate: candidate
-                    });
+                try {
+                    audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    audioStream.getTracks().forEach(track => peerConnection.addTrack(track, audioStream));
+                    
+                    const options = { mimeType: 'audio/webm;codecs=opus' };
+                    mediaRecorder = new MediaRecorder(audioStream, options);
+                    
+                    mediaRecorder.ondataavailable = event => {
+                        if (event.data.size > 0 && dataChannel.readyState === 'open') {
+                            dataChannel.send(event.data);
+                        }
+                    };
+                    
+                    mediaRecorder.start(1000); // Send data every 1 second
+                    isRecording = true;
+                    recordButton.textContent = 'Stop Recording';
+                    startTime = Date.now();
+                    timerInterval = setInterval(updateTimer, 10);
+                    status.textContent = 'Recording...';
+                } catch (err) {
+                    console.error('Error accessing microphone:', err);
+                    status.textContent = 'Error: ' + err.message;
                 }
-                
-                startButton.disabled = true;
-                recordButton.disabled = false;
-                status.textContent = 'Session started';
-            } catch (error) {
-                console.error('Error starting session:', error);
-                status.textContent = 'Error: ' + error.message;
-            }
-        }
-
-	
-	function handleServerMessage(event) {
-            const message = JSON.parse(event.data);
-            if (message.type === 'answer') {
-                const remoteDesc = new RTCSessionDescription({
-                    type: 'answer',
-                    sdp: message.sdp
-                });
-                peerConnection.setRemoteDescription(remoteDesc)
-                    .catch(error => console.error('Error setting remote description:', error));
             }
         }
 

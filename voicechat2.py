@@ -3,16 +3,16 @@ import aiohttp
 import json
 import logging
 import os
+import re
 import tempfile
 import time
-import traceback
 import uuid
+import traceback
 from collections import deque
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 import aiortc
-from aiortc import RTCPeerConnection, RTCSessionDescription
 from aiortc import RTCPeerConnection, RTCSessionDescription, RTCIceCandidate
 from aiortc.contrib.media import MediaPlayer, MediaRecorder
 
@@ -39,7 +39,8 @@ class ConversationManager:
             "current_turn": 0,
             "is_processing": False,
             "peer_connection": None,
-            "audio_track": None
+            "audio_track": None,
+            "data_channel": None
         }
         return session_id
 
@@ -80,7 +81,6 @@ async def transcribe_audio(audio_data, session_id, turn_id):
         logger.error(traceback.format_exc())
         raise
 
-
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
@@ -99,6 +99,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 
                 @pc.on("datachannel")
                 def on_datachannel(channel):
+                    conversation_manager.sessions[session_id]["data_channel"] = channel
                     @channel.on("message")
                     async def on_message(message):
                         if conversation_manager.sessions[session_id]["is_processing"]:
@@ -135,10 +136,17 @@ async def websocket_endpoint(websocket: WebSocket):
             
             elif data['type'] == 'ice-candidate':
                 if conversation_manager.sessions[session_id]["peer_connection"] is not None:
+                    candidate_parts = data['candidate']['candidate'].split()
                     candidate = RTCIceCandidate(
-                        sdpMid=data['candidate']['sdpMid'],
-                        sdpMLineIndex=data['candidate']['sdpMLineIndex'],
-                        candidate=data['candidate']['candidate']
+                        component=int(candidate_parts[1]),
+                        foundation=candidate_parts[0],
+                        protocol=candidate_parts[2],
+                        priority=int(candidate_parts[3]),
+                        ip=candidate_parts[4],
+                        port=int(candidate_parts[5]),
+                        type=candidate_parts[7],
+                        sdpMid=data['candidate'].get('sdpMid'),
+                        sdpMLineIndex=data['candidate'].get('sdpMLineIndex')
                     )
                     await conversation_manager.sessions[session_id]["peer_connection"].addIceCandidate(candidate)
                 else:
@@ -156,7 +164,6 @@ async def websocket_endpoint(websocket: WebSocket):
                 await conversation_manager.sessions[session_id]["peer_connection"].close()
             del conversation_manager.sessions[session_id]
         await websocket.close()
-
 
 async def process_audio_message(audio_data, session_id, channel):
     try:
