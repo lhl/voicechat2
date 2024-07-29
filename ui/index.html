@@ -55,6 +55,7 @@
         <button id="recordButton">Start Recording</button>
         <div id="status">Ready</div>
         <div id="logArea"></div>
+        <div id="streamedText"></div>
     </div>
 
     <script>
@@ -69,6 +70,41 @@
         let startTime;
         let timerInterval;
         let socket;
+
+        let audioQueue = [];
+        let isPlaying = false;
+
+        function playNextAudio() {
+            if (audioQueue.length === 0 || isPlaying) {
+                return;
+            }
+
+            isPlaying = true;
+            const audioBlob = audioQueue.shift();
+            const audio = new Audio(URL.createObjectURL(audioBlob));
+
+            audio.onended = () => {
+                isPlaying = false;
+                playNextAudio(); // Play the next audio in the queue
+            };
+
+            audio.onerror = (error) => {
+                log(`Error playing audio: ${error.message}`);
+                isPlaying = false;
+                playNextAudio(); // Try to play the next audio in case of an error
+            };
+
+            audio.play().catch((error) => {
+                log(`Error starting audio playback: ${error.message}`);
+                isPlaying = false;
+                playNextAudio(); // Try to play the next audio in case of an error
+            });
+        }
+
+        function queueAudioForPlayback(audioBlob) {
+            audioQueue.push(audioBlob);
+            playNextAudio(); // Try to play if not already playing
+        }
 
         function log(message) {
             const timestamp = new Date().toISOString();
@@ -195,7 +231,6 @@
             }
         };
 
-
         function initializeWebSocket() {
             socket = new WebSocket('ws://localhost:8000/ws');
 
@@ -217,16 +252,19 @@
             };
 
             socket.onmessage = (event) => {
-                log(`Received message from server: ${event.data}`);
+                log(`Received message from server: ${typeof event.data}`);
                 if (event.data instanceof Blob) {
                     // Handle audio data
-                    playAudio(event.data);
+                    queueAudioForPlayback(event.data);
                 } else {
                     // Handle JSON messages
                     try {
                         const message = JSON.parse(event.data);
                         log(`Parsed server message: ${JSON.stringify(message)}`);
-                        if (message.type === 'processing_complete') {
+                        if (message.type === 'text') {
+                            // Handle streamed text from LLM
+                            displayStreamedText(message.content);
+                        } else if (message.type === 'processing_complete') {
                             status.textContent = 'Ready';
                         } else if (message.type === 'error') {
                             log(`Error from server: ${message.message}`);
@@ -237,6 +275,15 @@
                     }
                 }
             };
+        }
+
+        function displayStreamedText(text) {
+            // You can implement this function to display the streamed text in your UI
+            // For example, you could append it to a designated element:
+            const streamedTextElement = document.getElementById('streamedText');
+            if (streamedTextElement) {
+                streamedTextElement.textContent += text;
+            }
         }
 
         // Initialize recorder and WebSocket when the page loads
