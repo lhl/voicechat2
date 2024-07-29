@@ -3,8 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Voice Recorder</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/opus-recorder/8.0.5/recorder.min.js"></script>
+    <title>AI Voice Assistant</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -49,15 +48,17 @@
 </head>
 <body>
     <div class="container">
-        <h1>AI Voice Recorder</h1>
+        <h1>AI Voice Assistant</h1>
         <div id="timer">00:00:000</div>
         <div id="latency">Response Latency: 0.00ms</div>
-        <button id="recordButton">Start Recording</button>
+        <button id="startButton">Start Session</button>
+        <button id="recordButton" disabled>Start Recording</button>
         <div id="status">Ready</div>
         <div id="logArea"></div>
     </div>
 
     <script>
+        const startButton = document.getElementById('startButton');
         const recordButton = document.getElementById('recordButton');
         const status = document.getElementById('status');
         const logArea = document.getElementById('logArea');
@@ -65,10 +66,12 @@
         const latencyDisplay = document.getElementById('latency');
 
         let isRecording = false;
-        let recorder;
         let startTime;
         let timerInterval;
-        let socket;
+        let peerConnection;
+        let dataChannel;
+        let audioStream;
+        let mediaRecorder;
 
         function log(message) {
             const timestamp = new Date().toISOString();
@@ -83,149 +86,184 @@
             timerDisplay.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}:${milliseconds.toString().padStart(3, '0')}`;
         }
 
-    function initializeRecorder() {
-        const config = {
-        encoderPath: 'https://cdnjs.cloudflare.com/ajax/libs/opus-recorder/8.0.5/encoderWorker.min.js',
-        encoderApplication: 2048,
-        encoderFrameSize: 20,
-        encoderSampleRate: 48000,
-        numberOfChannels: 1,
-        streamPages: false,
-        originalSampleRateOverride: 48000,
-        mediaTrackConstraints: { audio: true },
-        bufferLength: 8192 // Increase the buffer size to 8192 samples
-        };
-
-        recorder = new Recorder(config);
-
-        let audioChunks = [];
-
-        recorder.ondataavailable = (typedArray) => {
-            log(`Data available: ${typedArray.length} bytes`);
-            audioChunks.push(typedArray);
-        };
-
-        recorder.onstart = () => {
-            log('Recording started');
-            status.textContent = 'Recording...';
-            startTime = Date.now();
-            timerInterval = setInterval(updateTimer, 10);
-        };
-
-        recorder.onstop = () => {
-            log('Recording stopped');
-            status.textContent = 'Processing...';
-            clearInterval(timerInterval);
-
-            const blob = new Blob(audioChunks, { 'type' : 'audio/ogg; codecs=opus' });
-            audioChunks = []; // Clear the chunks for the next recording
-        
-            if (socket && socket.readyState === WebSocket.OPEN) {
-                log(`Sending audio file: ${blob.size} bytes`);
-                socket.send(blob);
-            } else {
-                log('WebSocket is not open. Cannot send audio.');
-            }
-        };
-    }
-
-
-        function initializeWebSocket() {
-            socket = new WebSocket('ws://localhost:8000/ws');
-
-            socket.onopen = () => {
-                log('WebSocket connected');
-                status.textContent = 'Ready';
-                recordButton.disabled = false;
-            };
-
-            socket.onclose = () => {
-                log('WebSocket disconnected');
-                status.textContent = 'Disconnected';
-                recordButton.disabled = true;
-            };
-
-            socket.onerror = (error) => {
-                log(`WebSocket error: ${error.message}`);
-                status.textContent = 'Error';
-            };
-
-            socket.onmessage = (event) => {
-                if (event.data instanceof Blob) {
-                    // Handle audio data
-                    playAudio(event.data);
-                } else {
-                    // Handle JSON messages
-                    const message = JSON.parse(event.data);
-                    if (message.type === 'processing_complete') {
-                        status.textContent = 'Ready';
-                    } else if (message.type === 'error') {
-                        log(`Error: ${message.message}`);
-                        status.textContent = 'Error';
-                    }
+        async function startSession() {
+            const configuration = {'iceServers': [{'urls': 'stun:stun.l.google.com:19302'}]};
+            peerConnection = new RTCPeerConnection(configuration);
+            
+            dataChannel = peerConnection.createDataChannel('chat');
+            dataChannel.onmessage = handleDataChannelMessage;
+            
+            peerConnection.onicecandidate = event => {
+                if (event.candidate) {
+                    sendToServer({
+                        type: 'ice-candidate',
+                        candidate: event.candidate
+                    });
                 }
             };
-        }
-
-/*
-const mediaSource = new MediaSource();
-const audio = new Audio();
-audio.src = URL.createObjectURL(mediaSource);
-
-let sourceBuffer;
-
-mediaSource.addEventListener('sourceopen', () => {
-    sourceBuffer = mediaSource.addSourceBuffer('audio/ogg; codecs=opus');
-});
-
-function playAudio(audioChunk) {
-    if (sourceBuffer && sourceBuffer.updating === false) {
-        sourceBuffer.appendBuffer(audioChunk);
-    } else {
-        console.error('SourceBuffer is not ready to append data:', sourceBuffer);
-    }
-}
-*/
-
-        function playAudio(audioBlob) {
-            const audio = new Audio(URL.createObjectURL(audioBlob));
-            audio.oncanplaythrough = () => {
-                const latency = Date.now() - startTime;
-                latencyDisplay.textContent = `Response Latency: ${latency}ms`;
-                log(`Audio response received. Latency: ${latency}ms`);
-            };
-            audio.play();
-        }
-
-
-    recordButton.onclick = () => {
-        if (isRecording) {
-        isRecording = false;
-        recordButton.textContent = 'Start Recording';
-        recorder.stop()
-            .then(() => {
-            log('Recording stopped successfully');
-            })
-            .catch((error) => {
-            log(`Error stopping recording: ${error.message}`);
+            
+            const offer = await peerConnection.createOffer();
+            await peerConnection.setLocalDescription(offer);
+            
+            sendToServer({
+                type: 'offer',
+                sdp: peerConnection.localDescription.sdp
             });
-        } else {
-        isRecording = true;
-        recordButton.textContent = 'Stop Recording';
-        recorder.start()
-            .then(() => {
-            log('Recording started successfully');
-            })
-            .catch((error) => {
-            log(`Error starting recording: ${error.message}`);
+            
+            startButton.disabled = true;
+            recordButton.disabled = false;
+            status.textContent = 'Session started';
+        }
+
+        async function startRecording() {
+            if (isRecording) {
+                mediaRecorder.stop();
+                isRecording = false;
+                recordButton.textContent = 'Start Recording';
+                clearInterval(timerInterval);
+            } else {
+                try {
+                    audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    audioStream.getTracks().forEach(track => peerConnection.addTrack(track, audioStream));
+                    
+                    const options = { mimeType: 'audio/webm;codecs=opus' };
+mediaRecorder = new MediaRecorder(audioStream, options);
+                    
+                    mediaRecorder.ondataavailable = event => {
+                        if (event.data.size > 0 && dataChannel.readyState === 'open') {
+                            dataChannel.send(event.data);
+                        }
+                    };
+                    
+                    mediaRecorder.start(1000); // Send data every 1 second
+                    isRecording = true;
+                    recordButton.textContent = 'Stop Recording';
+                    startTime = Date.now();
+                    timerInterval = setInterval(updateTimer, 10);
+                    status.textContent = 'Recording...';
+                } catch (err) {
+                    console.error('Error accessing microphone:', err);
+                    status.textContent = 'Error: ' + err.message;
+                }
+            }
+        }
+
+        function handleDataChannelMessage(event) {
+            const message = JSON.parse(event.data);
+            switch (message.type) {
+                case 'llm_output':
+                    log('LLM: ' + message.content);
+                    break;
+                case 'tts_complete':
+                    log('TTS completed for: ' + message.sentence);
+                    const latency = Date.now() - startTime;
+                    latencyDisplay.textContent = `Response Latency: ${latency}ms`;
+                    break;
+                case 'interrupted':
+                    log('Processing interrupted');
+                    break;
+                case 'processing_complete':
+                    status.textContent = 'Ready';
+                    break;
+                case 'error':
+                    log('Error: ' + message.message);
+                    status.textContent = 'Error';
+                    break;
+                default:
+                    log('Unknown message type: ' + message.type);
+            }
+        }
+
+        let socket;
+	let iceCandidatesQueue = [];
+
+	function initializeWebSocket() {
+            return new Promise((resolve, reject) => {
+                socket = new WebSocket('ws://' + window.location.host + '/ws');
+                socket.onopen = () => {
+                    console.log('WebSocket connected');
+                    resolve(socket);
+                };
+                socket.onerror = (error) => {
+                    console.error('WebSocket error:', error);
+                    reject(error);
+                };
+                socket.onmessage = handleServerMessage;
             });
         }
-    };
 
-        // Initialize recorder and WebSocket when the page loads
+	function sendToServer(data) {
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify(data));
+            } else {
+                console.warn('WebSocket not ready, unable to send data');
+            }
+        }
+
+
+	async function startSession() {
+            try {
+                await initializeWebSocket();
+                
+                const configuration = {'iceServers': [{'urls': 'stun:stun.l.google.com:19302'}]};
+                peerConnection = new RTCPeerConnection(configuration);
+                
+                dataChannel = peerConnection.createDataChannel('chat');
+                dataChannel.onmessage = handleDataChannelMessage;
+                
+                peerConnection.onicecandidate = event => {
+                    if (event.candidate) {
+                        sendToServer({
+                            type: 'ice-candidate',
+                            candidate: event.candidate
+                        });
+                    }
+                };
+                
+                const offer = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offer);
+                
+                sendToServer({
+                    type: 'offer',
+                    sdp: peerConnection.localDescription.sdp
+                });
+                
+                // Send any queued ICE candidates
+                while (iceCandidatesQueue.length) {
+                    const candidate = iceCandidatesQueue.shift();
+                    sendToServer({
+                        type: 'ice-candidate',
+                        candidate: candidate
+                    });
+                }
+                
+                startButton.disabled = true;
+                recordButton.disabled = false;
+                status.textContent = 'Session started';
+            } catch (error) {
+                console.error('Error starting session:', error);
+                status.textContent = 'Error: ' + error.message;
+            }
+        }
+
+	
+	function handleServerMessage(event) {
+            const message = JSON.parse(event.data);
+            if (message.type === 'answer') {
+                const remoteDesc = new RTCSessionDescription({
+                    type: 'answer',
+                    sdp: message.sdp
+                });
+                peerConnection.setRemoteDescription(remoteDesc)
+                    .catch(error => console.error('Error setting remote description:', error));
+            }
+        }
+
+        startButton.onclick = startSession;
+        recordButton.onclick = startRecording;
+
+        // Initialize when the page loads
         window.onload = () => {
-            initializeRecorder();
-            initializeWebSocket();
             log('Application initialized');
         };
     </script>
