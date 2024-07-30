@@ -45,32 +45,57 @@
             font-family: monospace;
             font-size: 0.9rem;
         }
+        #conversationLog {
+            width: 100%;
+            height: 300px;
+            border: 1px solid #ccc;
+            overflow-y: auto;
+            margin-top: 1rem;
+            padding: 0.5rem;
+            font-family: Arial, sans-serif;
+        }
+        .user-message {
+            color: blue;
+        }
+        .ai-message {
+            color: green;
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>AI Voice Recorder</h1>
+        <h1>voicechat2</h1>
         <div id="timer">00:00:000</div>
         <div id="latency">Response Latency: 0.00ms</div>
         <button id="recordButton">Start Recording</button>
         <div id="status">Ready</div>
+        <div id="conversationLog"></div>
         <div id="logArea"></div>
-        <div id="streamedText"></div>
     </div>
 
     <script>
+        // Elements to update
         const recordButton = document.getElementById('recordButton');
         const status = document.getElementById('status');
         const logArea = document.getElementById('logArea');
         const timerDisplay = document.getElementById('timer');
         const latencyDisplay = document.getElementById('latency');
 
-        let isRecording = false;
-        let recorder;
+        // Network
         let startTime;
-        let timerInterval;
         let socket;
 
+        // Recording
+        let isRecording = false;
+        let recorder;
+        let timerInterval;
+
+        // Text 
+        let currentAIResponse = '';
+        let aiMessageElement = null;
+        let isAIResponding = false;
+
+        // Playback
         let audioQueue = [];
         let isPlaying = false;
 
@@ -185,53 +210,11 @@
 
         function playAudio(audioBlob) {
             const audio = new Audio(URL.createObjectURL(audioBlob));
-            audio.oncanplaythrough = () => {
-                const latency = Date.now() - startTime;
-                latencyDisplay.textContent = `Response Latency: ${latency}ms`;
-                log(`Audio response received. Latency: ${latency}ms`);
-            };
             audio.play();
         }
 
 
-        recordButton.onclick = () => {
-            // Initialize AudioContext on first user interaction
-            if (!audioContext) {
-                initAudioContext();
-            }
-
-            if (isRecording) {
-                isRecording = false;
-                recordButton.textContent = 'Start Recording';
-                recorder.stop()
-                    .then(() => {
-                        log('Recording stopped successfully');
-                        // Send stop_recording message to server
-                        if (socket && socket.readyState === WebSocket.OPEN) {
-                            const stopMessage = JSON.stringify({ action: "stop_recording" });
-                            log(`Sending stop_recording message: ${stopMessage}`);
-                            socket.send(stopMessage);
-                        } else {
-                            log(`WebSocket is not open. State: ${socket ? socket.readyState : 'undefined'}`);
-                        }
-                    })
-                    .catch((error) => {
-                        log(`Error stopping recording: ${error.message}`);
-                    });
-            } else {
-                isRecording = true;
-                recordButton.textContent = 'Stop Recording';
-                recorder.start()
-                    .then(() => {
-                        log('Recording started successfully');
-                    })
-                    .catch((error) => {
-                        log(`Error starting recording: ${error.message}`);
-                    });
-            }
-        };
-
-        function initializeWebSocket() {
+    function initializeWebSocket() {
             socket = new WebSocket('ws://localhost:8000/ws');
 
             socket.onopen = () => {
@@ -263,9 +246,25 @@
                         log(`Parsed server message: ${JSON.stringify(message)}`);
                         if (message.type === 'text') {
                             // Handle streamed text from LLM
-                            displayStreamedText(message.content);
+                            updateAIResponse(message.content);
+                        } else if (message.type === 'transcription') {
+                            // Handle transcribed user input
+                            displayMessage('User', message.content);
+                            // Reset AI response for new turn
+                            currentAIResponse = '';
+                            aiMessageElement = null;
+                            isAIResponding = true;
+                        } else if (message.type === 'first_audio_response') {
+                            firstResponseTime = Date.now();
+                            updateLatency();
                         } else if (message.type === 'processing_complete') {
                             status.textContent = 'Ready';
+                            isAIResponding = false;
+                            // Remove the cursor
+                            if (aiMessageElement) {
+                                const cursor = aiMessageElement.querySelector('.ai-cursor');
+                                if (cursor) cursor.remove();
+                            }
                         } else if (message.type === 'error') {
                             log(`Error from server: ${message.message}`);
                             status.textContent = 'Error';
@@ -277,14 +276,84 @@
             };
         }
 
-        function displayStreamedText(text) {
-            // You can implement this function to display the streamed text in your UI
-            // For example, you could append it to a designated element:
-            const streamedTextElement = document.getElementById('streamedText');
-            if (streamedTextElement) {
-                streamedTextElement.textContent += text;
+        function displayMessage(role, content) {
+            const conversationLog = document.getElementById('conversationLog');
+            const messageElement = document.createElement('p');
+            messageElement.className = role.toLowerCase() + '-message';
+            messageElement.textContent = `${role}: ${content}`;
+            conversationLog.appendChild(messageElement);
+            conversationLog.scrollTop = conversationLog.scrollHeight;
+            return messageElement;
+        }
+
+        function updateAIResponse(newContent) {
+            currentAIResponse += newContent;
+            if (!aiMessageElement) {
+                aiMessageElement = displayMessage('AI', '');
+            }
+            aiMessageElement.innerHTML = `AI: ${currentAIResponse}${isAIResponding ? '<span class="ai-cursor"></span>' : ''}`;
+            const conversationLog = document.getElementById('conversationLog');
+            conversationLog.scrollTop = conversationLog.scrollHeight;
+        }
+
+
+
+        recordButton.onclick = () => {
+            // Initialize AudioContext on first user interaction
+            if (!audioContext) {
+                initAudioContext();
+            }
+
+            if (isRecording) {
+                isRecording = false;
+                recordButton.textContent = 'Start Recording';
+                recorder.stop()
+                    .then(() => {
+                        log('Recording stopped successfully');
+                        recordingEndTime = Date.now();
+                        // Send stop_recording message to server
+                        if (socket && socket.readyState === WebSocket.OPEN) {
+                            const stopMessage = JSON.stringify({ action: "stop_recording" });
+                            log(`Sending stop_recording message: ${stopMessage}`);
+                            socket.send(stopMessage);
+                        } else {
+                            log(`WebSocket is not open. State: ${socket ? socket.readyState : 'undefined'}`);
+                        }
+                    })
+                    .catch((error) => {
+                        log(`Error stopping recording: ${error.message}`);
+                    });
+            } else {
+                isRecording = true;
+                recordButton.textContent = 'Stop Recording';
+
+                // Clear the previous AI response when starting a new recording
+                currentAIResponse = '';
+                aiMessageElement = null;
+                isAIResponding = false;
+
+                recorder.start()
+                    .then(() => {
+                        log('Recording started successfully');
+                    })
+                    .catch((error) => {
+                        log(`Error starting recording: ${error.message}`);
+                    });
+            }
+        };
+
+
+        let recordingEndTime;
+        let firstResponseTime;
+        
+        function updateLatency() {
+            if (recordingEndTime && firstResponseTime) {
+                const latency = firstResponseTime - recordingEndTime;
+                latencyDisplay.textContent = `Response Latency: ${latency}ms`;
+                log(`Audio response latency: ${latency}ms`);
             }
         }
+
 
         // Initialize recorder and WebSocket when the page loads
         window.onload = () => {

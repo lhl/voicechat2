@@ -150,6 +150,9 @@ async def websocket_endpoint(websocket: WebSocket):
                                 logger.info(f"Transcription result: {text}")
                                 conversation_manager.add_user_message(session_id, text)
                                 
+                                # Send transcribed text to client
+                                await websocket.send_json({"type": "transcription", "content": text})
+                                
                                 await process_and_stream(websocket, session_id, text)
                                 
                                 await websocket.send_json({"type": "processing_complete"})
@@ -195,6 +198,7 @@ async def generate_llm_response(websocket, session_id, text):
                 "messages": conversation + [{"role": "user", "content": text}],
                 "stream": True
             }) as response:
+                complete_text = ""
                 accumulated_text = ""
                 async for line in response.content:
                     if line:
@@ -208,11 +212,12 @@ async def generate_llm_response(websocket, session_id, text):
                                 if 'choices' in data and len(data['choices']) > 0:
                                     content = data['choices'][0]['delta'].get('content', '')
                                     if content:
+                                        complete_text += content
                                         accumulated_text += content
                                         await websocket.send_json({"type": "text", "content": content})
                                         
-                                        # Check if we have a complete sentence or substantial chunk
-                                        if content.endswith(('.', '!', '?')) or len(accumulated_text) > 100:
+                                        # Check if we have a complete sentence
+                                        if content.endswith(('.', '!', '?')):
                                             await generate_and_send_tts(websocket, accumulated_text)
                                             accumulated_text = ""
                         except json.JSONDecodeError:
@@ -222,11 +227,10 @@ async def generate_llm_response(websocket, session_id, text):
                 
                 # Send any remaining text
                 if accumulated_text:
-                    conversation_manager.sessions[session_id]["llm_output_sentences"].append(accumulated_text)
                     await generate_and_send_tts(websocket, accumulated_text)
 
 
-                conversation_manager.add_ai_message(session_id, "".join(conversation_manager.sessions[session_id]["llm_output_sentences"]))
+                conversation_manager.add_ai_message(session_id, complete_text)
 
     except Exception as e:
         logger.error(f"LLM error: {str(e)}")
@@ -256,22 +260,25 @@ def process_sentence(sentence):
     sentence = re.sub(r'[^\x00-\x7F]+', '', sentence)
     return sentence.strip()
 
+
 async def generate_and_stream_tts(websocket: WebSocket, session_id):
     llm_output_sentences = conversation_manager.sessions[session_id]["llm_output_sentences"]
     
+    first_response_sent = False
     while llm_output_sentences:
         sentence = llm_output_sentences.popleft()
         if sentence:
-            await tts_generate_and_send(websocket, sentence)
-
+            opus_data = await tts_generate_and_send(websocket, sentence)
+            if not first_response_sent:
+                await websocket.send_json({"type": "first_audio_response"})
+                first_response_sent = True
+            await websocket.send_bytes(opus_data)
 
 async def tts_generate_and_send(websocket: WebSocket, sentence):
     async with aiohttp.ClientSession() as session:
         async with session.post(TTS_ENDPOINT, json={"text": sentence}) as response:
             opus_data = await response.read()
-
-    # Send the Opus data directly
-    await websocket.send_bytes(opus_data)
+    return opus_data
 
 
 @app.get("/")
