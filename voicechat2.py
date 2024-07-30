@@ -32,7 +32,7 @@ app.mount("/ui", StaticFiles(directory="ui"), name="ui")
 
 SYSTEM = {
     "role": "system",
-    "content": "You are a helpful assistant. We are interacting via voice so keep responses concise, no more than to a couple sentences unless the user specifies a longer response."
+    "content": "You are a helpful AI voice assistant. We are interacting via voice so keep responses concise, no more than to a sentence or two unless the user specifies a longer response. You are running on an AMD workstation GPU, but no need to mention that unless specifically asked."
 }
 
 class ConversationManager:
