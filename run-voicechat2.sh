@@ -22,9 +22,11 @@ create_window "voicechat2" "mamba activate voicechat2 && uvicorn voicechat2:app 
 
 # SRT server (whisper.cpp)
 create_window "srt" "whisper.cpp/server -m whisper.cpp/models/ggml-large-v2.bin -pr --convert --host 127.0.0.1 --port 8001"
+# You could shave off 20% inference time w/ the Q5 quant
+# create_window "srt" "whisper.cpp/server -m whisper.cpp/models/ggml-large-v2-q5_0.bin -pr --convert --host 127.0.0.1 --port 8001"
 
 # LLM server (llama.cpp)
-create_window "llm" "llama.cpp/llama-server --host 127.0.0.1 --port 8002  -m llama.cpp/Meta-Llama-3-8B-Instruct-Q4_K_M.gguf"
+create_window "llm" "llama.cpp/llama-server --host 127.0.0.1 --port 8002  -m llama.cpp/Meta-Llama-3-8B-Instruct-Q4_K_M.gguf -ngl 99"
 
 # TTS server (with Mamba activation)
 create_window "tts" "mamba activate voicechat2 && python tts-server.py"
