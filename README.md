@@ -94,9 +94,39 @@ local-tunnel.sh - connect to the GPU machine via a jump machine
 ```
 
 
-# Other Audio Projects
+# Other AI Voicechat Projects
 
+## webrtc-ai-voice-chat
+The demo shows a fair amount of latency (~10s) but this project isn't so different (uses WebRTC not websockets) from voicechat2 (HF Transformers, Ollama)
+- https://github.com/lalanikarim/webrtc-ai-voice-chat
+- Apache 2.0
+
+## june
+A console-based local client (HF Transformers, Ollama, Coqui TTS, PortAudio)
+- https://github.com/mezbaul-h/june
+- MIT
+
+## GlaDOS
+This is a very responsive console-based local-client app that also has VAD and interruption support, plus a really clever hook! (whisper.cpp, llama.cpp, piper, espeak)
 - https://github.com/dnhkng/GlaDOS
+- MIT
+
+## local-talking-llm
+Another console-based local client, more of a proof of concept but with w/ blog writeup.
+- https://github.com/vndee/local-talking-llm
+- https://blog.duy.dev/build-your-own-voice-assistant-and-run-it-locally/
+- MIT
+
+## BUD-E - natural_voice_assistant
+Another console-based local client (FastConformer, HF Transformers, StyleTTS2, espeak)
 - https://github.com/LAION-AI/natural_voice_assistant
-- https://github.com/KoljaB/RealtimeSTT
-- https://github.com/KoljaB/RealtimeTTS
+- MIT
+
+## LocalAIVoiceChat
+KoljaB has a number of interesting projects around console-based local clients like [RealtimeSTT](https://github.com/KoljaB/RealtimeSTT), [RealtimeTTS](https://github.com/KoljaB/RealtimeTTS), [Linguflex](https://github.com/KoljaB/Linguflex), etc. (faster_whisper, llama.cpp, Coqui XTTS)
+- https://github.com/KoljaB/LocalAIVoiceChat
+- NC (Coqui Model License)
+
+## rtvi-web-demo
+This is *not* a local voicechat client, but it does have a neat WebRTC front-end, so might be worth poking around into (Vite/React, Tailwind, Radix)
+- https://github.com/rtvi-ai/rtvi-web-demo
