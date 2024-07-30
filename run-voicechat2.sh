@@ -17,17 +17,17 @@ create_window() {
 # Create a new byobu session named 'voicechat2' or attach to it if it already exists
 byobu new-session -d -s voicechat2
 
-# FastAPI server
-create_window "voicechat2" "uvicorn app:app --host 0.0.0.0 --port 8000 --reload"
+# FastAPI server (with Mamba activation)
+create_window "voicechat2" "mamba activate voicechat2 && uvicorn voicechat2:app --host 0.0.0.0 --port 8000 --reload"
 
 # SRT server (whisper.cpp)
 create_window "srt" "whisper.cpp/server -m whisper.cpp/models/ggml-large-v2.bin -pr --convert --host 127.0.0.1 --port 8001"
 
 # LLM server (llama.cpp)
-create_window "llm" "llama.cpp/server --host 127.0.0.1 --port 8002"
+create_window "llm" "llama.cpp/llama-server --host 127.0.0.1 --port 8002  -m llama.cpp/Meta-Llama-3-8B-Instruct-Q4_K_M.gguf"
 
-# TTS server
-create_window "tts" "tts_server.py"
+# TTS server (with Mamba activation)
+create_window "tts" "mamba activate voicechat2 && python tts-server.py"
 
 # Attach to the session
 byobu attach-session -t voicechat2
