@@ -180,11 +180,8 @@ async def websocket_endpoint(websocket: WebSocket):
 
 async def process_and_stream(websocket: WebSocket, session_id, text):
     try:
-        # LLM processing
+        # We interleave LLM and TTS output here
         await generate_llm_response(websocket, session_id, text)
-        
-        # TTS processing and streaming
-        # await generate_and_stream_tts(websocket, session_id)
     finally:
         conversation_manager.sessions[session_id]["is_processing"] = False
         conversation_manager.sessions[session_id]["first_audio_sent"] = False
@@ -252,6 +249,7 @@ async def generate_llm_response(websocket, session_id, text):
         logger.error(traceback.format_exc())
         raise
 
+
 async def generate_and_send_tts(websocket, text):
     async with aiohttp.ClientSession() as session:
         async with session.post(TTS_ENDPOINT, json={"text": text}) as response:
@@ -268,38 +266,13 @@ async def process_llm_content(websocket, session_id, content):
             conversation_manager.add_ai_message(session_id, processed_sentence)
             logger.debug(f"Processed sentence: {processed_sentence}")
 
+
 def process_sentence(sentence):
     sentence = re.sub(r'~+', '!', sentence)
     sentence = re.sub(r"\(.*?\)", "", sentence)
     sentence = re.sub(r"(\*[^*]+\*)|(_[^_]+_)", "", sentence)
     sentence = re.sub(r'[^\x00-\x7F]+', '', sentence)
     return sentence.strip()
-
-
-async def generate_and_stream_tts(websocket: WebSocket, session_id):
-    llm_output_sentences = conversation_manager.sessions[session_id]["llm_output_sentences"]
-    logger.debug(llm_output_sentences)
-    
-    logger.debug('generate_and_stream_tts')
-    logger.debug('first_audio_response???')
-    while llm_output_sentences:
-        sentence = llm_output_sentences.popleft()
-        logger.debug(sentence)
-        if sentence:
-            opus_data = await tts_generate_and_send(websocket, sentence)
-            logger.debug('== in sentence')
-            if not conversation_manager.sessions[session_id]["first_audio_sent"]:
-                logger.debug('first_audio_response')
-                await websocket.send_json({"type": "first_audio_response"})
-                conversation_manager.sessions[session_id]["first_audio_sent"] = True
-            await websocket.send_bytes(opus_data)
-
-
-async def tts_generate_and_send(websocket: WebSocket, sentence):
-    async with aiohttp.ClientSession() as session:
-        async with session.post(TTS_ENDPOINT, json={"text": sentence}) as response:
-            opus_data = await response.read()
-    return opus_data
 
 
 @app.get("/")
