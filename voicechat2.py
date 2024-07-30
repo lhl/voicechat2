@@ -3,18 +3,21 @@ import aiohttp
 import io
 import json
 import logging
+import numpy as np
 import os
 import re
+import soundfile as sf
 import tempfile
 import time
+import traceback
 import uuid
+import wave
+
 from collections import deque
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-import opuslib
-import numpy as np
-import traceback
+from mutagen.oggopus import OggOpus
 
 # External endpoints
 SRT_ENDPOINT = os.getenv("SRT_ENDPOINT", "http://localhost:8001/inference")
@@ -122,15 +125,43 @@ class ConversationManager:
 
 conversation_manager = ConversationManager()
 
+
 async def transcribe_audio(audio_data, session_id, turn_id):
     conversation_manager.update_latency_metric(session_id, "srt_start", time.time())
     try:
+        '''
+        # whisper.cpp requires at least 1s but if you pad with silence, it will hallucinate, WIP
+
+        audio = OggOpus(fileobj=io.BytesIO(audio_data))
+        logger.debug(f'Input Audio Length: {audio.info.length}')
+        if audio.info.length < 1.0:
+            # Decode with Soundfile instead here
+            with io.BytesIO(audio_data) as audio_file:
+                data, sample_rate = sf.read(audio_file)
+
+            logger.debug(sample_rate)
+            target_length = 640000
+            padding_length = target_length - len(data)
+            if padding_length > 0:
+                padded_data = np.pad(data, (0, padding_length), 'constant')
+            else:
+                padded_data = data
+
+            # Write to WAV
+            temp_file_path = f"/tmp/{session_id}-{turn_id}.wav"
+            sf.write(temp_file_path, padded_data, sample_rate)
+        else:
+            temp_file_path = f"/tmp/{session_id}-{turn_id}.opus"
+            with open(temp_file_path, "wb") as temp_file:
+                temp_file.write(audio_data)
+        '''
         temp_file_path = f"/tmp/{session_id}-{turn_id}.opus"
         with open(temp_file_path, "wb") as temp_file:
             temp_file.write(audio_data)
 
         # Add a small delay to ensure the file is fully written
         await asyncio.sleep(0.1)
+
 
         async with aiohttp.ClientSession() as session:
             data = aiohttp.FormData()
