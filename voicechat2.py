@@ -46,9 +46,48 @@ class ConversationManager:
             "is_processing": False,
             "audio_buffer": b'',  # New: Buffer to accumulate audio data
             "last_activity": time.time(),
-            "first_audio_sent": False
+            "first_audio_sent": False,
+            "latency_metrics": {
+                "start_time": 0,
+                "srt_start": 0,
+                "srt_end": 0,
+                "llm_start": 0,
+                "llm_first_token": 0,
+                "llm_first_sentence": 0,
+                "tts_start": 0,
+                "tts_end": 0,
+                "first_audio_response": 0,
+            }
         }
         return session_id
+
+    def reset_latency_metrics(self, session_id):
+        self.sessions[session_id]["latency_metrics"] = {
+            "start_time": time.time(),
+            "srt_start": 0,
+            "srt_end": 0,
+            "llm_start": 0,
+            "llm_first_token": 0,
+            "llm_first_sentence": 0,
+            "tts_start": 0,
+            "tts_end": 0,
+            "first_audio_response": 0,
+        }
+
+    def update_latency_metric(self, session_id, metric, value):
+        self.sessions[session_id]["latency_metrics"][metric] = value
+
+    def calculate_latencies(self, session_id):
+        metrics = self.sessions[session_id]["latency_metrics"]
+        start_time = metrics["start_time"]
+        
+        return {
+            "total_voice_to_voice": metrics["first_audio_response"] - start_time,
+            "srt_duration": metrics["srt_end"] - metrics["srt_start"],
+            "llm_ttft": metrics["llm_first_token"] - metrics["llm_start"],
+            "llm_ttfs": metrics["llm_first_sentence"] - metrics["llm_start"],
+            "tts_duration": metrics["tts_end"] - metrics["tts_start"],
+        }
 
     def add_user_message(self, session_id, message):
         self.sessions[session_id]["conversation"].append({"role": "user", "content": message})
@@ -84,6 +123,7 @@ class ConversationManager:
 conversation_manager = ConversationManager()
 
 async def transcribe_audio(audio_data, session_id, turn_id):
+    conversation_manager.update_latency_metric(session_id, "srt_start", time.time())
     try:
         temp_file_path = f"/tmp/{session_id}-{turn_id}.opus"
         with open(temp_file_path, "wb") as temp_file:
@@ -103,7 +143,10 @@ async def transcribe_audio(audio_data, session_id, turn_id):
                 result = await response.json()
 
         # Optionally, you can remove the temporary file here if you don't need it for debugging
-        # os.remove(temp_file_path)
+        os.remove(temp_file_path)
+
+        # logging
+        conversation_manager.update_latency_metric(session_id, "srt_end", time.time())
 
         logger.debug(result)
         return result['text']
@@ -134,6 +177,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     logger.debug(f"Parsed JSON data: {data}")
                     if data.get("action") == "stop_recording":
                         logger.info("Stop recording message received. Processing audio...")
+                        conversation_manager.reset_latency_metrics(session_id)
                         if conversation_manager.sessions[session_id]["is_processing"]:
                             logger.warning("Interrupting ongoing processing")
                             conversation_manager.sessions[session_id]["llm_output_sentences"].clear()
@@ -155,6 +199,9 @@ async def websocket_endpoint(websocket: WebSocket):
                                 await websocket.send_json({"type": "transcription", "content": text})
                                 
                                 await process_and_stream(websocket, session_id, text)
+
+                                latencies = conversation_manager.calculate_latencies(session_id)
+                                await websocket.send_json({"type": "latency_metrics", "metrics": latencies})
                                 
                                 await websocket.send_json({"type": "processing_complete"})
                             except Exception as e:
@@ -188,6 +235,7 @@ async def process_and_stream(websocket: WebSocket, session_id, text):
 
 
 async def generate_llm_response(websocket, session_id, text):
+    conversation_manager.update_latency_metric(session_id, "llm_start", time.time())
     try:
         conversation = conversation_manager.get_conversation(session_id)
         
@@ -199,6 +247,8 @@ async def generate_llm_response(websocket, session_id, text):
             }) as response:
                 complete_text = ""
                 accumulated_text = ""
+                first_token_received = False
+                first_sentence_received = False
                 async for line in response.content:
                     if line:
                         try:
@@ -211,17 +261,25 @@ async def generate_llm_response(websocket, session_id, text):
                                 if 'choices' in data and len(data['choices']) > 0:
                                     content = data['choices'][0]['delta'].get('content', '')
                                     if content:
+                                        if not first_token_received:
+                                            conversation_manager.update_latency_metric(session_id, "llm_first_token", time.time())
+                                            first_token_received = True
                                         complete_text += content
                                         accumulated_text += content
                                         await websocket.send_json({"type": "text", "content": content})
                                         
                                         # Check if we have a complete sentence
                                         if content.endswith(('.', '!', '?')):
+                                            if not first_sentence_received:
+                                                conversation_manager.update_latency_metric(session_id, "llm_first_sentence", time.time())
+                                                first_sentence_received = True
+                                                conversation_manager.update_latency_metric(session_id, "tts_start", time.time())
                                             await generate_and_send_tts(websocket, accumulated_text)
                                             accumulated_text = ""
 
                                             if not conversation_manager.sessions[session_id]["first_audio_sent"]:
                                                 logger.debug('first_audio_response')
+                                                conversation_manager.update_latency_metric(session_id, "first_audio_response", time.time())
                                                 await websocket.send_json({"type": "first_audio_response"})
                                                 conversation_manager.sessions[session_id]["first_audio_sent"] = True
                         except json.JSONDecodeError:
@@ -232,12 +290,20 @@ async def generate_llm_response(websocket, session_id, text):
                 # Send any remaining text
                 if accumulated_text:
                     logger.debug(f"Remaining text: {accumulated_text}")
+                    if not first_sentence_received:
+                        conversation_manager.update_latency_metric(session_id, "llm_first_sentence", time.time())
+                        first_sentence_received = True
+                        conversation_manager.update_latency_metric(session_id, "tts_start", time.time())
                     await generate_and_send_tts(websocket, accumulated_text)
 
                     if not conversation_manager.sessions[session_id]["first_audio_sent"]:
                         logger.debug('first_audio_response')
+                        conversation_manager.update_latency_metric(session_id, "first_audio_response", time.time())
                         await websocket.send_json({"type": "first_audio_response"})
                         conversation_manager.sessions[session_id]["first_audio_sent"] = True
+
+                # Finished sending TTS
+                conversation_manager.update_latency_metric(session_id, "tts_end", time.time())
 
                 conversation_manager.add_ai_message(session_id, complete_text)
                 logger.debug(complete_text)

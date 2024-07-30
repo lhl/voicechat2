@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Voice Recorder</title>
+    <title>voicechat2</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/opus-recorder/8.0.5/recorder.min.js"></script>
     <style>
         body {
@@ -60,14 +60,70 @@
         .ai-message {
             color: green;
         }
+        #latencyMetrics {
+            margin-top: 10px;
+            font-size: 0.9em;
+            font-family: monospace;
+        }
+        #latencyMetrics table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        #latencyMetrics th, #latencyMetrics td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+        #latencyMetrics th {
+            background-color: #f2f2f2;
+            font-weight: bold;
+        }
+        #recordButton {
+            user-select: none;
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+        }
+        #recordButton:active {
+            background-color: #ff0000;
+            color: white;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>voicechat2</h1>
         <div id="timer">00:00:000</div>
-        <div id="latency">Response Latency: 0.00ms</div>
-        <button id="recordButton">Start Recording</button>
+        <button id="recordButton">Press and Hold to Chat</button>
+        <p>You can also hold the space bar to chat!</p>
+        <div id="latencyMetrics">
+            <table>
+                <tr>
+                    <th>Metric</th>
+                    <th>Value</th>
+                </tr>
+                <tr>
+                    <td>Total Voice-to-Voice</td>
+                    <td id="totalVoiceToVoice">0ms</td>
+                </tr>
+                <tr>
+                    <td>SRT Duration</td>
+                    <td id="srtDuration">0ms</td>
+                </tr>
+                <tr>
+                    <td>LLM TTFT</td>
+                    <td id="llmTTFT">0ms</td>
+                </tr>
+                <tr>
+                    <td>LLM TTFS</td>
+                    <td id="llmTTFS">0ms</td>
+                </tr>
+                <tr>
+                    <td>TTS Duration</td>
+                    <td id="ttsDuration">0ms</td>
+                </tr>
+            </table>
+        </div>
         <div id="status">Ready</div>
         <div id="conversationLog"></div>
         <div id="logArea"></div>
@@ -87,6 +143,7 @@
 
         // Recording
         let isRecording = false;
+        let recordingStartTime;
         let recorder;
         let timerInterval;
 
@@ -98,6 +155,86 @@
         // Playback
         let audioQueue = [];
         let isPlaying = false;
+
+        function startRecording() {
+            if (!isRecording) {
+                // Clear the previous AI response when starting a new recording
+                currentAIResponse = '';
+                aiMessageElement = null;
+                isAIResponding = false;
+
+                isRecording = true;
+                recordingStartTime = Date.now();
+                updateTimerDisplay();
+                recorder.start();
+                document.getElementById('status').textContent = 'Recording...';
+            }
+        }
+
+        function stopRecording() {
+            if (isRecording) {
+                isRecording = false;
+                recorder.stop()
+                    .then(() => {
+                        document.getElementById('status').textContent = 'Processing...';
+                        log('Recording stopped successfully');
+                        recordingEndTime = Date.now();
+                        // Send stop_recording message to server
+                        if (socket && socket.readyState === WebSocket.OPEN) {
+                            const stopMessage = JSON.stringify({ action: "stop_recording" });
+                            log(`Sending stop_recording message: ${stopMessage}`);
+                            socket.send(stopMessage);
+                        } else {
+                            log(`WebSocket is not open. State: ${socket ? socket.readyState : 'undefined'}`);
+                        }
+                    })
+                    .catch((error) => {
+                        log(`Error stopping recording: ${error.message}`);
+                    });
+            }
+        }
+
+        function updateTimerDisplay() {
+            if (isRecording) {
+                const elapsed = Date.now() - recordingStartTime;
+                const minutes = Math.floor(elapsed / 60000);
+                const seconds = Math.floor((elapsed % 60000) / 1000);
+                const milliseconds = elapsed % 1000;
+                timerDisplay.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}:${milliseconds.toString().padStart(3, '0')}`;
+                requestAnimationFrame(updateTimerDisplay);
+            }
+        }
+
+        // Button event listeners
+        recordButton.addEventListener('mousedown', startRecording);
+        recordButton.addEventListener('mouseup', stopRecording);
+        recordButton.addEventListener('mouseleave', stopRecording);
+
+        // Spacebar event listeners
+        document.addEventListener('keydown', (event) => {
+            if (event.code === 'Space' && !isRecording) {
+                event.preventDefault(); // Prevent scrolling
+                startRecording();
+            }
+        });
+
+        document.addEventListener('keyup', (event) => {
+            if (event.code === 'Space') {
+                event.preventDefault();
+                stopRecording();
+            }
+        });
+
+        // Touch event listeners for mobile devices
+        recordButton.addEventListener('touchstart', (event) => {
+            event.preventDefault();
+            startRecording();
+        });
+
+        recordButton.addEventListener('touchend', (event) => {
+            event.preventDefault();
+            stopRecording();
+        });
 
         function playNextAudio() {
             if (audioQueue.length === 0 || isPlaying) {
@@ -257,6 +394,8 @@
                         } else if (message.type === 'first_audio_response') {
                             firstResponseTime = Date.now();
                             updateLatency();
+                        } else if (message.type === 'latency_metrics') {
+                            updateLatencyMetrics(message.metrics);
                         } else if (message.type === 'processing_complete') {
                             status.textContent = 'Ready';
                             isAIResponding = false;
@@ -275,6 +414,16 @@
                 }
             };
         }
+
+
+        function updateLatencyMetrics(metrics) {
+            document.getElementById("totalVoiceToVoice").textContent = `${(metrics.total_voice_to_voice * 1000).toFixed(1)}ms`;
+            document.getElementById("srtDuration").textContent = `${(metrics.srt_duration * 1000).toFixed(1)}ms`;
+            document.getElementById("llmTTFT").textContent = `${(metrics.llm_ttft * 1000).toFixed(1)}ms`;
+            document.getElementById("llmTTFS").textContent = `${(metrics.llm_ttfs * 1000).toFixed(1)}ms`;
+            document.getElementById("ttsDuration").textContent = `${(metrics.tts_duration * 1000).toFixed(1)}ms`;
+        }
+
 
         function displayMessage(role, content) {
             const conversationLog = document.getElementById('conversationLog');
@@ -297,7 +446,7 @@
         }
 
 
-
+        /*
         recordButton.onclick = () => {
             // Initialize AudioContext on first user interaction
             if (!audioContext) {
@@ -341,6 +490,7 @@
                     });
             }
         };
+        */
 
 
         let recordingEndTime;
@@ -349,7 +499,6 @@
         function updateLatency() {
             if (recordingEndTime && firstResponseTime) {
                 const latency = firstResponseTime - recordingEndTime;
-                latencyDisplay.textContent = `Response Latency: ${latency}ms`;
                 log(`Audio response latency: ${latency}ms`);
             }
         }
