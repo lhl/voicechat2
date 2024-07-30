@@ -35,6 +35,7 @@ pip install -r requirements.txt
 git clone https://github.com/ggerganov/whisper.cpp
 cd whisper.cpp
 # AMD version
+# -DGGML_HIP_UMA=ON to work with APUs (but hurts dGPU perf)
 GGML_HIPBLAS=1 make -j 
 # Nvidia version
 GGML_CUDA=1 make -j 
@@ -54,9 +55,9 @@ cd ..
 git clone https://github.com/ggerganov/llama.cpp
 cd llama.cpp
 # AMD version
-GGML_HIPBLAS=1 make -j 
+make GGML_HIPBLAS=1 -j 
 # Nvidia version
-GGML_CUDA=1 make -j 
+make GGML_CUDA=1 -j 
 
 # Grab your preferred GGUF model
 wget https://huggingface.co/bartowski/Meta-Llama-3-8B-Instruct-GGUF/resolve/main/Meta-Llama-3-8B-Instruct-Q4_K_M.gguf
