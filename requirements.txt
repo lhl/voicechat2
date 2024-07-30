@@ -8,3 +8,4 @@ scipy
 whisperx
 python-multipart
 opuslib
+mutagen
