@@ -121,7 +121,7 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         while True:
             message = await websocket.receive()
-            logger.debug(f"Received message: {message}")
+            # logger.debug(f"Received message: {message}")
             
             if 'bytes' in message:
                 audio_data = message['bytes']
@@ -239,9 +239,8 @@ async def generate_llm_response(websocket, session_id, text):
                         await websocket.send_json({"type": "first_audio_response"})
                         conversation_manager.sessions[session_id]["first_audio_sent"] = True
 
-
                 conversation_manager.add_ai_message(session_id, complete_text)
-                logger.info(f"LLM response generated. Sentences: {len(conversation_manager.sessions[session_id]['llm_output_sentences'])}")
+                logger.debug(complete_text)
 
 
     except Exception as e:
