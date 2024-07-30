@@ -2,7 +2,6 @@ aiortc
 fastapi
 uvicorn
 websockets
-llama-cpp-python
 TTS
 numpy
 scipy
