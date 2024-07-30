@@ -45,7 +45,8 @@ class ConversationManager:
             "current_turn": 0,
             "is_processing": False,
             "audio_buffer": b'',  # New: Buffer to accumulate audio data
-            "last_activity": time.time()
+            "last_activity": time.time(),
+            "first_audio_sent": False
         }
         return session_id
 
@@ -183,9 +184,10 @@ async def process_and_stream(websocket: WebSocket, session_id, text):
         await generate_llm_response(websocket, session_id, text)
         
         # TTS processing and streaming
-        await generate_and_stream_tts(websocket, session_id)
+        # await generate_and_stream_tts(websocket, session_id)
     finally:
         conversation_manager.sessions[session_id]["is_processing"] = False
+        conversation_manager.sessions[session_id]["first_audio_sent"] = False
 
 
 async def generate_llm_response(websocket, session_id, text):
@@ -220,6 +222,11 @@ async def generate_llm_response(websocket, session_id, text):
                                         if content.endswith(('.', '!', '?')):
                                             await generate_and_send_tts(websocket, accumulated_text)
                                             accumulated_text = ""
+
+                                            if not conversation_manager.sessions[session_id]["first_audio_sent"]:
+                                                logger.debug('first_audio_response')
+                                                await websocket.send_json({"type": "first_audio_response"})
+                                                conversation_manager.sessions[session_id]["first_audio_sent"] = True
                         except json.JSONDecodeError:
                             logger.warning(f"Failed to parse JSON: {line_text}")
                         except Exception as e:
@@ -227,10 +234,18 @@ async def generate_llm_response(websocket, session_id, text):
                 
                 # Send any remaining text
                 if accumulated_text:
+                    logger.debug(f"Remaining text: {accumulated_text}")
                     await generate_and_send_tts(websocket, accumulated_text)
+
+                    if not conversation_manager.sessions[session_id]["first_audio_sent"]:
+                        logger.debug('first_audio_response')
+                        await websocket.send_json({"type": "first_audio_response"})
+                        conversation_manager.sessions[session_id]["first_audio_sent"] = True
 
 
                 conversation_manager.add_ai_message(session_id, complete_text)
+                logger.info(f"LLM response generated. Sentences: {len(conversation_manager.sessions[session_id]['llm_output_sentences'])}")
+
 
     except Exception as e:
         logger.error(f"LLM error: {str(e)}")
@@ -263,16 +278,22 @@ def process_sentence(sentence):
 
 async def generate_and_stream_tts(websocket: WebSocket, session_id):
     llm_output_sentences = conversation_manager.sessions[session_id]["llm_output_sentences"]
+    logger.debug(llm_output_sentences)
     
-    first_response_sent = False
+    logger.debug('generate_and_stream_tts')
+    logger.debug('first_audio_response???')
     while llm_output_sentences:
         sentence = llm_output_sentences.popleft()
+        logger.debug(sentence)
         if sentence:
             opus_data = await tts_generate_and_send(websocket, sentence)
-            if not first_response_sent:
+            logger.debug('== in sentence')
+            if not conversation_manager.sessions[session_id]["first_audio_sent"]:
+                logger.debug('first_audio_response')
                 await websocket.send_json({"type": "first_audio_response"})
-                first_response_sent = True
+                conversation_manager.sessions[session_id]["first_audio_sent"] = True
             await websocket.send_bytes(opus_data)
+
 
 async def tts_generate_and_send(websocket: WebSocket, sentence):
     async with aiohttp.ClientSession() as session:
