@@ -175,7 +175,12 @@ async def websocket_endpoint(websocket: WebSocket):
                 try:
                     data = json.loads(message['text'])
                     logger.debug(f"Parsed JSON data: {data}")
-                    if data.get("action") == "stop_recording":
+                    if data.get("type") == "ping":
+                        # Immediately send a pong response
+                        await websocket.send_json({
+                            "type": "pong"
+                        })
+                    elif data.get("action") == "stop_recording":
                         logger.info("Stop recording message received. Processing audio...")
                         conversation_manager.reset_latency_metrics(session_id)
                         if conversation_manager.sessions[session_id]["is_processing"]:
@@ -202,14 +207,13 @@ async def websocket_endpoint(websocket: WebSocket):
 
                                 latencies = conversation_manager.calculate_latencies(session_id)
                                 await websocket.send_json({"type": "latency_metrics", "metrics": latencies})
-                                
-                                await websocket.send_json({"type": "processing_complete"})
                             except Exception as e:
                                 logger.error(f"Error during processing: {str(e)}")
                                 logger.error(traceback.format_exc())
                                 await websocket.send_json({"type": "error", "message": str(e)})
                             finally:
                                 conversation_manager.sessions[session_id]["is_processing"] = False
+                                await websocket.send_json({"type": "processing_complete"})
                     else:
                         logger.warning(f"Received unexpected action: {data.get('action')}")
                 except json.JSONDecodeError:

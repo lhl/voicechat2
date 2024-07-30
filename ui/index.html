@@ -122,6 +122,10 @@
                     <td>TTS Duration</td>
                     <td id="ttsDuration">0ms</td>
                 </tr>
+                <tr>
+                    <td>Network Latency</td>
+                    <td id="networkLatency">0ms</td>
+                </tr>
             </table>
         </div>
         <div id="status">Ready</div>
@@ -135,11 +139,13 @@
         const status = document.getElementById('status');
         const logArea = document.getElementById('logArea');
         const timerDisplay = document.getElementById('timer');
-        const latencyDisplay = document.getElementById('latency');
 
         // Network
         let startTime;
         let socket;
+        let isProcessing = false;
+        let latencyIntervalId = null;
+        let ping = null;
 
         // Recording
         let isRecording = false;
@@ -156,8 +162,38 @@
         let audioQueue = [];
         let isPlaying = false;
 
+        // Ping every second
+        function startLatencyMeasurement() {
+            if (latencyIntervalId === null) {
+                latencyIntervalId = setInterval(measureLatency, 1000);
+            }
+        }
+
+        function stopLatencyMeasurement() {
+            if (latencyIntervalId !== null) {
+                clearInterval(latencyIntervalId);
+                latencyIntervalId = null;
+            }
+        }
+
+        function measureLatency() {
+            if (!isProcessing) {
+                ping = performance.now();
+                socket.send(JSON.stringify({ type: 'ping' }));
+            }
+        }
+
+        function updateLatencyDisplay(latency) {
+          const latencyElement = document.getElementById('networkLatency');
+          if (latencyElement) {
+            latencyElement.textContent = `${latency.toFixed(2)}ms`;
+          }
+        }
+
         function startRecording() {
             if (!isRecording) {
+                stopLatencyMeasurement();
+
                 // Clear the previous AI response when starting a new recording
                 currentAIResponse = '';
                 aiMessageElement = null;
@@ -358,12 +394,16 @@
                 log('WebSocket connected');
                 status.textContent = 'Ready';
                 recordButton.disabled = false;
+
+                startLatencyMeasurement();
             };
 
             socket.onclose = (event) => {
                 log(`WebSocket disconnected. Code: ${event.code}, Reason: ${event.reason}`);
                 status.textContent = 'Disconnected';
                 recordButton.disabled = true;
+
+                stopLatencyMeasurement();
             };
 
             socket.onerror = (error) => {
@@ -380,8 +420,17 @@
                     // Handle JSON messages
                     try {
                         const message = JSON.parse(event.data);
-                        log(`Parsed server message: ${JSON.stringify(message)}`);
-                        if (message.type === 'text') {
+
+                        // Don't spam logs...
+                        if (message.type !== 'pong') {
+                            log(`Parsed server message: ${JSON.stringify(message)}`);
+                        }
+
+                        if (message.type === 'pong') {
+                            const latency = performance.now() - ping;
+                            // console.log(`Current network latency: ${latency.toFixed(2)}ms`);
+                            updateLatencyDisplay(latency);
+                        } else if (message.type === 'text') {
                             // Handle streamed text from LLM
                             updateAIResponse(message.content);
                         } else if (message.type === 'transcription') {
@@ -393,11 +442,12 @@
                             isAIResponding = true;
                         } else if (message.type === 'first_audio_response') {
                             firstResponseTime = Date.now();
-                            updateLatency();
                         } else if (message.type === 'latency_metrics') {
                             updateLatencyMetrics(message.metrics);
                         } else if (message.type === 'processing_complete') {
                             status.textContent = 'Ready';
+                            isProcessing = false;
+                            startLatencyMeasurement;
                             isAIResponding = false;
                             // Remove the cursor
                             if (aiMessageElement) {
@@ -496,14 +546,6 @@
         let recordingEndTime;
         let firstResponseTime;
         
-        function updateLatency() {
-            if (recordingEndTime && firstResponseTime) {
-                const latency = firstResponseTime - recordingEndTime;
-                log(`Audio response latency: ${latency}ms`);
-            }
-        }
-
-
         // Initialize recorder and WebSocket when the page loads
         window.onload = () => {
             initializeRecorder();
