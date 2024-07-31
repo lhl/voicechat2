@@ -1,11 +1,9 @@
 # voicechat2
 A fast, fully local AI Voicechat using WebSockets
 
-[![Watch the demo video](https://raw.githubusercontent.com/lhl/voicechat2/main/docs/voicechat2.gif)](http://www.youtube.com/watch?v=j_yMp0uCo_Y)
+[voicechat2 demo video](https://github.com/user-attachments/assets/498ce979-18b6-4225-b0da-01b6910e2bd7)
 
-https://raw.githubusercontent.com/lhl/voicechat2/main/docs/voicechat2.mp4
-
-<sup>*(Click to watch the demo YouTube video w/ audio)*</sup>
+<sup>*Unmute to hear the audio*</sup>
 
 On an 7900-class AMD RDNA3 card, voice-to-voice latency is in the 1 second range, but on a 4090, it is 500ms, and can be as low as 300ms (using faster_whisper, distil-whisper models)
 - Whisper large-v2 (Q5)
