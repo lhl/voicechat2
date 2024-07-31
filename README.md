@@ -1,8 +1,9 @@
 # voicechat2
-A local SRT/LLM/TTS Voicechat using Websockets
+A fast, fully local AI Voicechat using WebSockets
 
 [![Watch the demo video](https://raw.githubusercontent.com/lhl/voicechat2/main/docs/voicechat2.gif)](http://www.youtube.com/watch?v=j_yMp0uCo_Y)
-(Click to watch the demo YouTube video w/ audio)
+
+<sup>*(Click to watch the demo YouTube video w/ audio)*</sup>
 
 # Install
 These instructions are for Ubuntu LTS and assume you've [setup your ROCm](https://rocm.docs.amd.com/projects/install-on-linux/en/latest/tutorial/quick-start.html) or [CUDA](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/) already.
