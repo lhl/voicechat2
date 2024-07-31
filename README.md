@@ -3,7 +3,14 @@ A fast, fully local AI Voicechat using WebSockets
 
 [![Watch the demo video](https://raw.githubusercontent.com/lhl/voicechat2/main/docs/voicechat2.gif)](http://www.youtube.com/watch?v=j_yMp0uCo_Y)
 
+https://raw.githubusercontent.com/lhl/voicechat2/main/docs/voicechat2.webm
+
 <sup>*(Click to watch the demo YouTube video w/ audio)*</sup>
+
+On an 7900-class AMD RDNA3 card, voice-to-voice latency is in the 1 second range, but on a 4090, it is 500ms, and can be as low as 300ms (using faster_whisper, distil-whisper models)
+- Whisper large-v2 (Q5)
+- Llama 3 8B (Q4_K_M)
+- TTS vtck
 
 # Install
 These instructions are for Ubuntu LTS and assume you've [setup your ROCm](https://rocm.docs.amd.com/projects/install-on-linux/en/latest/tutorial/quick-start.html) or [CUDA](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/) already.
