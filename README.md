@@ -8,10 +8,10 @@ A fast, fully local AI Voicechat using WebSockets
 On an 7900-class AMD RDNA3 card, voice-to-voice latency is in the 1 second range, but on a 4090, it is 500ms, and can be as low as 300ms (using faster_whisper, distil-whisper models)
 - Whisper large-v2 (Q5)
 - Llama 3 8B (Q4_K_M)
-- TTS vtck
+- tts_models/en/vctk/vits (Coqui TTS default VITS models)
 
 # Install
-These instructions are for Ubuntu LTS and assume you've [setup your ROCm](https://rocm.docs.amd.com/projects/install-on-linux/en/latest/tutorial/quick-start.html) or [CUDA](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/) already.
+These installation instructions are for Ubuntu LTS and assume you've [setup your ROCm](https://rocm.docs.amd.com/projects/install-on-linux/en/latest/tutorial/quick-start.html) or [CUDA](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/) already.
 
 I recommend you use [conda](https://docs.conda.io/en/latest/) or (my preferred), [mamba](https://mamba.readthedocs.io/en/latest/installation/mamba-installation.html) for environment management. It will make your life easier.
 
