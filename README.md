@@ -3,7 +3,7 @@ A fast, fully local AI Voicechat using WebSockets
 
 [![Watch the demo video](https://raw.githubusercontent.com/lhl/voicechat2/main/docs/voicechat2.gif)](http://www.youtube.com/watch?v=j_yMp0uCo_Y)
 
-https://raw.githubusercontent.com/lhl/voicechat2/main/docs/voicechat2.webm
+https://raw.githubusercontent.com/lhl/voicechat2/main/docs/voicechat2.mp4
 
 <sup>*(Click to watch the demo YouTube video w/ audio)*</sup>
 
