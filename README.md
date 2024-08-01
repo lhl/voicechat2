@@ -5,10 +5,14 @@ A fast, fully local AI Voicechat using WebSockets
 
 <sup>*Unmute to hear the audio*</sup>
 
-On an 7900-class AMD RDNA3 card, voice-to-voice latency is in the 1 second range, but on a 4090, it is 500ms, and can be as low as 300ms (using faster_whisper, distil-whisper models)
+On an 7900-class AMD RDNA3 card, voice-to-voice latency is in the 1 second range:
 - Whisper large-v2 (Q5)
 - Llama 3 8B (Q4_K_M)
 - tts_models/en/vctk/vits (Coqui TTS default VITS models)
+
+On a 4090, using [Faster Whisper](https://github.com/SYSTRAN/faster-whisper) with [faster-distil-whisper-large-v2](https://huggingface.co/Systran/faster-distil-whisper-large-v2) we can cut the latency down to as low as 300ms:  
+
+[voicechat2 demo](https://github.com/user-attachments/assets/5b8a3805-0116-4f7b-920d-231a2dbfb481)
 
 # Install
 These installation instructions are for Ubuntu LTS and assume you've [setup your ROCm](https://rocm.docs.amd.com/projects/install-on-linux/en/latest/tutorial/quick-start.html) or [CUDA](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/) already.
@@ -19,7 +23,7 @@ I recommend you use [conda](https://docs.conda.io/en/latest/) or (my preferred),
 ```
 sudo apt update
 
-# Not strictly required but helpers we use
+# Not strictly required but the helpers we use
 sudo apt install byobu curl wget
 
 # Audio processing
@@ -95,18 +99,17 @@ pip install huggingface_hub
 huggingface-cli download --local-dir . yl4579/StyleTTS2-LJSpeech
 ```
 
-We include some extra convenience scripts for launching:
+Some extra convenience scripts for launching:
 ```
 run-voicechat2.sh - on your GPU machine, tries to launch all servers in separate byobu sessions
 remote-tunnel.sh - connect your GPU machine to a jump machine
 local-tunnel.sh - connect to the GPU machine via a jump machine
 ```
 
-
 # Other AI Voicechat Projects
 
 ## webrtc-ai-voice-chat
-The demo shows a fair amount of latency (~10s) but this project isn't so different (uses WebRTC not websockets) from voicechat2 (HF Transformers, Ollama)
+The demo shows a fair amount of latency (~10s) but this project isn't the closest to what we're doing (it uses WebRTC not websockets) from voicechat2 (HF Transformers, Ollama)
 - https://github.com/lalanikarim/webrtc-ai-voice-chat
 - Apache 2.0
 
