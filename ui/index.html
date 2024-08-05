@@ -4,13 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>voicechat2</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/opus-recorder/8.0.5/recorder.min.js"></script>
+
+    <script src="https://cdn.jsdelivr.net/npm/symbl-opus-encdec@0.1.2/src/recorder.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.7/dist/bundle.min.js"></script>
-    <script type="text/javascript">
-      LIBOPUS_WASM_URL = "/ui/libopusjs/dist/libopus.wasm";
-    </script>
-    <script type="text/javascript" src="/ui/libopusjs/dist/libopus.wasm.js"></script>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -240,179 +237,82 @@
         }
 
 
-// START monkeypatch
-/*
-function resampleAudio(audioData, originalSampleRate, targetSampleRate) {
-    const ratio = targetSampleRate / originalSampleRate;
-    const newLength = Math.round(audioData.length * ratio);
-    const result = new Float32Array(newLength);
+        // START monkeypatch
+        Recorder.prototype.encodeAudio = function(audioFloat32Array) {
+          return new Promise((resolve, reject) => {
+            // Store the original callbacks
+            const originalOndataavailable = this.ondataavailable;
+            const originalOnstart = this.onstart;
+            const originalOnstop = this.onstop;
 
-    for (let i = 0; i < newLength; i++) {
-        const index = i / ratio;
-        const lowerIndex = Math.floor(index);
-        const upperIndex = Math.ceil(index);
-        const fraction = index - lowerIndex;
+            let encodedChunks = [];
 
-        if (upperIndex >= audioData.length) {
-            result[i] = audioData[lowerIndex];
-        } else {
-            result[i] = (1 - fraction) * audioData[lowerIndex] + fraction * audioData[upperIndex];
-        }
-    }
+            this.ondataavailable = (typedArray) => {
+              encodedChunks.push(typedArray);
+            };
 
-    return result;
-}
-*/
+            this.onstart = () => {
+              // When recording starts, send the audio data to the encoder
+              if (this.encoder && this.encoder.postMessage) {
+                this.encoder.postMessage({
+                  command: 'encode',
+                  buffers: [audioFloat32Array]
+                });
+              }
+            };
 
-async function convertToOpus(audioFloat32, sampleRate = 16000) {
-  try {
-    // Input validation
-    if (!audioFloat32 || !(audioFloat32 instanceof Float32Array) || audioFloat32.length === 0) {
-      throw new Error('Invalid input: audioFloat32 must be a non-empty Float32Array');
-    }
+            this.onstop = () => {
+              // Combine all chunks into a single Blob
+              const opusBlob = new Blob(encodedChunks, { type: 'audio/ogg; codecs=opus' });
+              
+              // Restore original callbacks
+              this.ondataavailable = originalOndataavailable;
+              this.onstart = originalOnstart;
+              this.onstop = originalOnstop;
 
-    console.log(`Input audio length: ${audioFloat32.length}, Sample rate: ${sampleRate}`);
+              resolve(opusBlob);
+            };
 
-    // Create an Opus encoder
-    const encoder = new libopus.Encoder(1, sampleRate, 16000, 20, false);
-    
-    // Convert Float32Array to Int16Array
-    const audioInt16 = new Int16Array(audioFloat32.length);
-    for (let i = 0; i < audioFloat32.length; i++) {
-      const sample = audioFloat32[i];
-      audioInt16[i] = Math.max(-32768, Math.min(32767, Math.round(sample * 32767)));
-    }
-    
-    console.log(`Converted to Int16Array, length: ${audioInt16.length}`);
+            // Start and immediately stop the recorder to trigger the encoding process
+            this.start().then(() => {
+              this.stop();
+            }).catch(reject);
+          });
+        };
+        // END monkeypatch
 
-    // Encode the audio with timeout
-    console.log('Starting encoder.input()');
-    await new Promise((resolve, reject) => {
-      setTimeout(() => reject(new Error('encoder.input() timed out')), 5000); // 5 second timeout
-      try {
-        encoder.input(audioInt16);
-        resolve();
-      } catch (error) {
-        reject(error);
-      }
-    });
-
-    console.log('encoder.input() completed successfully');
-
-    console.log('Starting encoder.output() loop');
-    const opusChunks = [];
-    let encodedChunk;
-    let chunkCount = 0;
-    let totalEncodedLength = 0;
-    let emptyChunkCount = 0;
-    const maxChunks = Math.ceil(audioInt16.length / 320) + 10; // Assuming 20ms frames at 16kHz, plus some buffer
-    const maxEmptyChunks = 5; // Maximum number of consecutive empty chunks before we stop
-
-    while (chunkCount < maxChunks && emptyChunkCount < maxEmptyChunks) {
-      encodedChunk = encoder.output();
-      
-      if (encodedChunk === null) {
-        console.log('Encoder returned null, encoding complete.');
-        break;
-      }
-
-      if (encodedChunk && encodedChunk.length > 0) {
-        opusChunks.push(encodedChunk);
-        totalEncodedLength += encodedChunk.length;
-        chunkCount++;
-        emptyChunkCount = 0; // Reset empty chunk count
-        if (chunkCount % 10 === 0) {
-          console.log(`Processed ${chunkCount} chunks, total encoded length: ${totalEncodedLength}`);
-        }
-      } else {
-        emptyChunkCount++;
-        console.log(`Received empty or invalid chunk at count ${chunkCount}, empty chunk count: ${emptyChunkCount}`);
-      }
-    }
-    
-    if (chunkCount >= maxChunks) {
-      console.warn(`Reached maximum number of chunks (${maxChunks}). Stopping encoding.`);
-    }
-
-    if (emptyChunkCount >= maxEmptyChunks) {
-      console.warn(`Received ${maxEmptyChunks} consecutive empty chunks. Stopping encoding.`);
-    }
-
-    console.log(`Number of Opus chunks: ${opusChunks.length}`);
-    console.log(`Total encoded data length: ${totalEncodedLength}`);
-
-    if (totalEncodedLength === 0) {
-      throw new Error('No valid encoded data produced');
-    }
-
-    const opusData = new Uint8Array(totalEncodedLength);
-    let position = 0;
-    for (const chunk of opusChunks) {
-      opusData.set(chunk, position);
-      position += chunk.length;
-    }
-
-    // Clean up
-    encoder.destroy();
-    
-    // Create and return a Blob
-    const blob = new Blob([opusData], { type: 'audio/opus' });
-    console.log(`Created Opus blob, size: ${blob.size}`);
-    return blob;
-  } catch (error) {
-    console.error('Error in convertToOpus:', error);
-    throw error;
-  }
-}
-// END monkeypatch
 
         async function initializeVAD() {
             try {
                 if(!myvad) {
                     myvad = await vad.MicVAD.new({
                         onSpeechEnd: async(audio) => {
+                            let opusBlob;
 
-                            let blob;
                             console.log('Speech ended, audio length:', audio.length);
 
                             clearInterval(timerInterval);
 
-                            // Ensure WebSocket is open, reinitialize if necessary
-                            if (!socket || socket.readyState !== WebSocket.OPEN) {
-                                log('WebSocket is not open. Reinitializing...');
-                                try {
-                                    await initializeWebSocketAsync();
-                                } catch (error) {
-                                    log(`Error reinitializing WebSocket: ${error.message}`);
-                                    return;
-                                }
-                            }
-
                             try {
-                                console.log('Starting encoding process');
-
-                                blob = await convertToOpus(audio);
-                                console.log('Encoding complete, Opus encoded blob size:', blob.size);
-                            } catch(error) {
+                                opusBlob = await recorder.encodeAudio(audio);
+                                console.log("Encoding complete, blob size:", opusBlob.size);
+                                
+                                // Now you can use the opusBlob as needed
+                                await initializeWebSocketAsync();
+                                if (socket && socket.readyState === WebSocket.OPEN) {
+                                    log(`Sending audio file: ${opusBlob.size} bytes`);
+                                    socket.send(opusBlob);
+                                    log('Audio file sent successfully');
+                                    // Send stop_recording message
+                                    socket.send(JSON.stringify({ action: "stop_recording" }));
+                                    log('Sent stop_recording message');
+                                } else {
+                                    log('WebSocket is not open. Cannot send audio.');
+                                }
+                            } catch (error) {
                                 console.error('Error encoding audio:', error);
                             }
 
-                            await ensureWebSocketOpen();
-                            console.log(socket);
-                            console.log(socket.readyState);
-                            console.log(WebSocket.OPEN);
-                            if (socket && socket.readyState === WebSocket.OPEN) {
-                                log(`Sending audio file: ${blob.size} bytes`);
-                                socket.send(blob);
-                                log('Audio file sent successfully');
-                                // Send stop_recording message
-                                socket.send(JSON.stringify({ action: "stop_recording" }));
-                                log('Sent stop_recording message');
-                            } else {
-                                log('WebSocket is not open. Cannot send audio.');
-                            }
-                                
-                            log('Speech detected and processed');
                         },
                         onVADMisfire: () => {
                             log('VAD misfire detected');
@@ -567,20 +467,25 @@ async function convertToOpus(audioFloat32, sampleRate = 16000) {
             timerDisplay.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}:${milliseconds.toString().padStart(3, '0')}`;
         }
 
-        let audioContext;
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
 
+        async function createSourceNode() {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            return audioContext.createMediaStreamSource(stream);
+        }
 
-        function initializeRecorder() {
+        async function initializeRecorder() {
+            const sourceNode = await createSourceNode();
             const config = {
-                encoderPath: 'https://cdnjs.cloudflare.com/ajax/libs/opus-recorder/8.0.5/encoderWorker.min.js',
-                encoderApplication: 2048,
-                encoderFrameSize: 20,
-                encoderSampleRate: 48000,
                 numberOfChannels: 1,
+                encoderSampleRate: 16000,
+                encoderFrameSize: 20,
+                maxFramesPerPage: 40,
+                encoderComplexity: 6,
+                encoderApplication: 2048, // Voice
+                originalSampleRate: 16000,
                 streamPages: true,
-                originalSampleRateOverride: 48000,
-                mediaTrackConstraints: { audio: true },
-                bufferLength: 8192 // Increase the buffer size to 8192 samples
+                sourceNode: sourceNode
             };
 
             recorder = new Recorder(config);
@@ -622,14 +527,6 @@ async function convertToOpus(audioFloat32, sampleRate = 16000) {
                 }
             };
         }
-
-        function initAudioContext() {
-            audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            if (audioContext.state === 'suspended') {
-                audioContext.resume();
-            }
-        }
-
 
         function playAudio(audioBlob) {
             const audio = new Audio(URL.createObjectURL(audioBlob));
@@ -759,7 +656,7 @@ async function convertToOpus(audioFloat32, sampleRate = 16000) {
         
         // Initialize recorder and WebSocket when the page loads
         window.onload = async () => {
-            initializeRecorder();
+            await initializeRecorder();
             await recorder.initialize;
             console.log('Recorder object:', recorder);
             console.log('Encoder object:', recorder.encoder);
