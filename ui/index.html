@@ -467,11 +467,19 @@
             timerDisplay.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}:${milliseconds.toString().padStart(3, '0')}`;
         }
 
-        const audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+        let audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
 
         async function createSourceNode() {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            return audioContext.createMediaStreamSource(stream);
+	    try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                return audioContext.createMediaStreamSource(stream);
+	    } catch {
+		// If we don't resample then recording will be 48K, 4x too slow...
+                recordButton.style.display = 'None';
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                return audioContext.createMediaStreamSource(stream);
+	    }
         }
 
         async function initializeRecorder() {
