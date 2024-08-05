@@ -397,7 +397,11 @@
 
     function initializeWebSocketAsync() {
         return new Promise((resolve, reject) => {
-        socket = new WebSocket('ws://localhost:8000/ws');
+            
+        let currentUrl = window.location;
+        let wsProtocol = currentUrl.protocol === 'https:' ? 'wss:' : 'ws:';
+        let wsUrl = `${wsProtocol}//${currentUrl.host}/ws`;
+        socket = new WebSocket(wsUrl);
 
         socket.onopen = () => {
                 log('WebSocket connected');
