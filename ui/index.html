@@ -297,8 +297,17 @@
                                 opusBlob = await recorder.encodeAudio(audio);
                                 console.log("Encoding complete, blob size:", opusBlob.size);
                                 
-                                // Now you can use the opusBlob as needed
-                                await initializeWebSocketAsync();
+				    // Ensure WebSocket is open, reinitialize if necessary
+				    if (!socket || socket.readyState !== WebSocket.OPEN) {
+					log('WebSocket is not open. Reinitializing...');
+					try {
+					    await initializeWebSocketAsync();
+					} catch (error) {
+					    log(`Error reinitializing WebSocket: ${error.message}`);
+					    return;
+					}
+				    }
+
                                 if (socket && socket.readyState === WebSocket.OPEN) {
                                     log(`Sending audio file: ${opusBlob.size} bytes`);
                                     socket.send(opusBlob);
