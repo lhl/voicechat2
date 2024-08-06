@@ -3,6 +3,7 @@ fastapi
 uvicorn
 websockets
 coqui-tts
+loguru
 numpy
 scipy
 whisperx
@@ -12,3 +13,4 @@ mutagen
 torch
 torchaudio
 transformers
+accelerate
