@@ -2,10 +2,12 @@ aiortc
 fastapi
 uvicorn
 websockets
-TTS
+coqui-tts
 numpy
 scipy
 whisperx
 python-multipart
 opuslib
 mutagen
+torch
+torchaudio

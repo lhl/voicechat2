@@ -23,7 +23,11 @@ print(f"Loaded in {elapsed:.2f}s")
 
 class TTSRequest(BaseModel):
     text: str
+    # Female
     speaker: str = "p273"
+    speaker: str = "p335"
+
+    # Male
 
 @app.get("/", response_class=HTMLResponse)
 async def get_form():
