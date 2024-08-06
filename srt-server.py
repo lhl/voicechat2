@@ -24,18 +24,27 @@ class TransformersEngine(TranscriptionEngine):
     def __init__(self):
         from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
 
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        # TODO: mps for mac
-        torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+        if torch.cuda.is_available():
+            device = "cuda"
+            torch_dtype = torch.float16
+        elif torch.backends.mps.is_available():
+            device = "mps"
+            torch_dtype = torch.float16
+        else:
+            device = "cpu"
+            torch_dtype = torch.float32
 
         # 400ms
         model_id = "openai/whisper-large-v2"
-
         # 220ms
         model_id = "distil-whisper/large-v2"
 
         model = AutoModelForSpeechSeq2Seq.from_pretrained(
-            model_id, torch_dtype=torch_dtype, low_cpu_mem_usage=True, use_safetensors=True
+            model_id, 
+            torch_dtype=torch_dtype, 
+            low_cpu_mem_usage=True, 
+            use_safetensors=True,
+            attn_implementation="flash_attention_2",
         )
         model.to(device)
 
@@ -53,7 +62,6 @@ class TransformersEngine(TranscriptionEngine):
             torch_dtype=torch_dtype,
             device=device,
             model_kwargs={"attn_implementation": "flash_attention_2"} if is_flash_attn_2_available() else {"attn_implementation": "sdpa"},
-
         )
 
     def transcribe(self, file, audio_content, **kwargs):
@@ -83,6 +91,42 @@ class FasterWhisperEngine(TranscriptionEngine):
 
         return full_text, [{"start": s.start, "end": s.end, "text": s.text} for s in segments]
 
+'''
+WIP - ffmpeg fails
+'''
+class SenseVoiceEngine(TranscriptionEngine):
+    def __init__(self):
+        from funasr import AutoModel
+        from funasr.utils.postprocess_utils import rich_transcription_postprocess
+
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+
+        # git clone https://huggingface.co/FunAudioLLM/SenseVoiceSmall
+        model_id = "FunAudioLLM/SenseVoiceSmall"
+
+        self.model = AutoModel(
+            model=model_id,
+            vad_kwargs={"max_single_segment_time": 30000},
+            device=device,
+            hub="hf",
+        )
+
+
+    def transcribe(self, file, audio_content, **kwargs):
+        res = self.model.generate(
+            input=unquote(file.filename),
+            cache={},
+            language="auto", # "zh", "en", "yue", "ja", "ko", "nospeech"
+            use_itn=True,
+            batch_size_s=60,
+            merge_length_s=15,
+        )
+        from funasr.utils.postprocess_utils import rich_transcription_postprocess
+        text = rich_transcription_postprocess(res[0]["text"])
+        logger.info(text)
+        return text, []
+
 
 # For shorter sentences, the regular transformers pipeline seems to be faster than faster-whisper?
 '''
@@ -95,6 +139,7 @@ except ImportError:
 '''
 engine = TransformersEngine()
 logger.info("Using TransformersEngine")
+
 
 class TranscriptionResponse(BaseModel):
     text: str

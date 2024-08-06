@@ -16,7 +16,14 @@ app = FastAPI()
 print('Loading VITS...')
 t0 = time.time()
 vits_model = 'tts_models/en/vctk/vits'
-device = "cuda" if torch.cuda.is_available() else "cpu"
+
+if torch.cuda.is_available():
+    device = "cuda"
+elif torch.backends.mps.is_available():
+    device = "mps"
+else:
+    device = "cpu"
+
 tts_vits = TTS(vits_model).to(device)
 elapsed = time.time() - t0
 print(f"Loaded in {elapsed:.2f}s")
