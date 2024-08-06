@@ -9,16 +9,25 @@ import re
 import soundfile as sf
 import tempfile
 import time
+import torch
 import traceback
 import uuid
 import wave
 
-
+from abc import ABC, abstractmethod
 from collections import deque
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from loguru import logger
 from mutagen.oggopus import OggOpus
+from pydantic import BaseModel
+from transformers.utils import is_flash_attn_2_available
+from typing import Union
+
+'''
+We are able to get down to as low as 220ms using this monolithic server with HF Transformers!
+'''
 
 # External endpoints
 LLM_ENDPOINT = os.getenv("LLM_ENDPOINT", "http://localhost:8002/v1/chat/completions")
@@ -28,26 +37,104 @@ logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
-app.mount("/ui", StaticFiles(directory="ui"), name="ui")
+app.mount("/ui", StaticFiles(directory="../ui"), name="ui")
 
 SYSTEM = {
     "role": "system",
     "content": "You are a helpful AI voice assistant. We are interacting via voice so keep responses concise, no more than to a sentence or two unless the user specifies a longer response. If there is a repetition or something weird, don't worry or comment about it, just answer normally. It's probably the speech-to-text hiccuping. If you can't understand the request, ask the user to try to say it again."
 }
 
-# mamba install -c conda-forge cudnn
 
-# Load WhisperX model
-# import whisperx
-# whisper_model = whisperx.load_model("large-v2", "cuda", compute_type="float16", language="en", task="transcribe")
+class TranscriptionEngine(ABC):
+    @abstractmethod
+    def transcribe(self, audio_content, **kwargs):
+        pass
 
-# Load faster-whisper
-from faster_whisper import WhisperModel
-model_size = "large-v2"
-model_size = "distil-large-v2"
-model_size = "distil-medium.en"
-model_size = "distil-large-v3"
-whisper_model = WhisperModel(model_size, device="cuda", compute_type="float16")
+class TransformersEngine(TranscriptionEngine):
+    def __init__(self):
+        from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
+
+        if torch.cuda.is_available():
+            device = "cuda"
+            torch_dtype = torch.float16
+        elif torch.backends.mps.is_available():
+            device = "mps"
+            torch_dtype = torch.float16
+        else:
+            device = "cpu"
+            torch_dtype = torch.float32
+
+        # 400ms
+        model_id = "openai/whisper-large-v2"
+        # 220ms
+        model_id = "distil-whisper/large-v2"
+
+        model = AutoModelForSpeechSeq2Seq.from_pretrained(
+            model_id, 
+            torch_dtype=torch_dtype, 
+            low_cpu_mem_usage=True, 
+            use_safetensors=True,
+            attn_implementation="flash_attention_2" if is_flash_attn_2_available() else "sdpa",
+        ).to(device)
+
+        processor = AutoProcessor.from_pretrained(model_id)
+
+        self.pipe = pipeline(
+            "automatic-speech-recognition",
+            model=model,
+            tokenizer=processor.tokenizer,
+            feature_extractor=processor.feature_extractor,
+            max_new_tokens=128,
+            chunk_length_s=30,
+            batch_size=16,
+            return_timestamps=True,
+            torch_dtype=torch_dtype,
+            device=device,
+            model_kwargs={"attn_implementation": "flash_attention_2"} if is_flash_attn_2_available() else {"attn_implementation": "sdpa"},
+        )
+
+    def transcribe(self, audio_content, **kwargs):
+        result = self.pipe(audio_content, **kwargs)
+        return result["text"], result.get("chunks", [])
+
+class FasterWhisperEngine(TranscriptionEngine):
+    def __init__(self):
+        from faster_whisper import WhisperModel
+
+        # 350ms
+        model_id = "large-v2"
+        # 300ms
+        model_id = "distil-large-v2"
+        # 280ms
+        model_id = "distil-medium.en"
+        # 300ms
+        model_id = "distil-large-v3"
+        
+        self.model = WhisperModel(model_id, device="cuda", compute_type="float16")
+
+    def transcribe(self, file, audio_content, **kwargs):
+        segments, _ = self.model.transcribe(unquote(file.filename), beam_size=5)
+
+        full_text = "".join(segment.text for segment in segments)
+        logger.info(full_text)
+
+        return full_text, [{"start": s.start, "end": s.end, "text": s.text} for s in segments]
+
+# For shorter sentences, the regular transformers pipeline seems to be faster than faster-whisper?
+'''
+try:
+    engine = FasterWhisperEngine()
+    logger.info("Using FasterWhisperEngine")
+except ImportError:
+    engine = TransformersEngine()
+    logger.info("Using TransformersEngine")
+'''
+engine = TransformersEngine()
+logger.info("Using TransformersEngine")
+
+
+class TranscriptionResponse(BaseModel):
+    text: str
 
 
 class ConversationManager:
@@ -144,30 +231,9 @@ conversation_manager = ConversationManager()
 async def transcribe_audio(audio_data, session_id, turn_id):
     conversation_manager.update_latency_metric(session_id, "srt_start", time.time())
     try:
-        '''
-        # Convert audio data to numpy array
-        with io.BytesIO(audio_data) as audio_file:
-            data, sample_rate = sf.read(audio_file)
-        # Ensure audio is in the correct format for WhisperX
-        if data.ndim > 1:
-            data = np.mean(data, axis=1)  # Convert stereo to mono if necessary
-        segments, info = whisper_model.transcribe(data, beam_size=10)
-        '''
 
-        
-        # Use WhisperX to transcribe
-        # result = whisper_model.transcribe(data, batch_size=16)
-        # transcribed_text = "".join(s["text"] for s in result["segments"])
-
-        # Faster Whisper File
-        temp_file_path = f"/tmp/{session_id}-{turn_id}.opus"
-        with open(temp_file_path, "wb") as temp_file:
-            temp_file.write(audio_data)
-        segments, info = whisper_model.transcribe(temp_file_path, beam_size=5)
-
-
-
-        transcribed_text = "".join(segment.text for segment in segments)
+        # Read the audio file
+        transcribed_text, _ = engine.transcribe(audio_data, generate_kwargs={"task": "transcribe"})
         
         # logging
         conversation_manager.update_latency_metric(session_id, "srt_end", time.time())
@@ -372,7 +438,7 @@ def process_sentence(sentence):
 
 @app.get("/")
 def read_root():
-    return FileResponse("ui/index.html")
+    return FileResponse("../ui/index.html")
 
 # Run session cleanup periodically
 '''
