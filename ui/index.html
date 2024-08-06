@@ -225,6 +225,24 @@
                 updateStatus('VAD enabled');
             }
         }
+        async function startVAD() {
+            if(isVADEnabled) {
+                if (myvad) {
+                    await myvad.start();
+                }
+                updateStatus('VAD enabled');
+            }
+
+            updateStatuss
+        }
+        async function pauseVAD() {
+            if(isVADEnabled) {
+                if (myvad) {
+                    await myvad.pause();
+                }
+                updateStatus('VAD paused');
+            }
+        }
 
         function ensureWebSocketOpen() {
           return new Promise((resolve) => {
@@ -297,16 +315,16 @@
                                 opusBlob = await recorder.encodeAudio(audio);
                                 console.log("Encoding complete, blob size:", opusBlob.size);
                                 
-				    // Ensure WebSocket is open, reinitialize if necessary
-				    if (!socket || socket.readyState !== WebSocket.OPEN) {
-					log('WebSocket is not open. Reinitializing...');
-					try {
-					    await initializeWebSocketAsync();
-					} catch (error) {
-					    log(`Error reinitializing WebSocket: ${error.message}`);
-					    return;
-					}
-				    }
+                                // Ensure WebSocket is open, reinitialize if necessary
+                                if (!socket || socket.readyState !== WebSocket.OPEN) {
+                                    log('WebSocket is not open. Reinitializing...');
+                                    try {
+                                        await initializeWebSocketAsync();
+                                    } catch (error) {
+                                        log(`Error reinitializing WebSocket: ${error.message}`);
+                                        return;
+                                    }
+                                }
 
                                 if (socket && socket.readyState === WebSocket.OPEN) {
                                     log(`Sending audio file: ${opusBlob.size} bytes`);
@@ -432,11 +450,17 @@
         });
 
         function playNextAudio() {
+            if(!isPlaying) {
+                startVAD();
+            }
+
             if (audioQueue.length === 0 || isPlaying) {
                 return;
             }
 
             isPlaying = true;
+            pauseVAD();
+
             const audioBlob = audioQueue.shift();
             const audio = new Audio(URL.createObjectURL(audioBlob));
 
@@ -479,16 +503,16 @@
         let audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
 
         async function createSourceNode() {
-	    try {
+            try {
                 const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
                 return audioContext.createMediaStreamSource(stream);
-	    } catch {
-		// If we don't resample then recording will be 48K, 4x too slow...
+            } catch {
+                // If we don't resample then recording will be 48K, 4x too slow...
                 recordButton.style.display = 'None';
                 audioContext = new (window.AudioContext || window.webkitAudioContext)();
                 const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
                 return audioContext.createMediaStreamSource(stream);
-	    }
+            }
         }
 
         async function initializeRecorder() {
