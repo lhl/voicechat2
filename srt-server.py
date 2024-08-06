@@ -44,9 +44,8 @@ class TransformersEngine(TranscriptionEngine):
             torch_dtype=torch_dtype, 
             low_cpu_mem_usage=True, 
             use_safetensors=True,
-            attn_implementation="flash_attention_2",
-        )
-        model.to(device)
+            attn_implementation="flash_attention_2" if is_flash_attn_2_available() else "sdpa",
+        ).to(device)
 
         processor = AutoProcessor.from_pretrained(model_id)
 
