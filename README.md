@@ -1,18 +1,23 @@
 # voicechat2
 A fast, fully local AI Voicechat using WebSockets
+- WebSocket server, allows for simple remote access
+- Default web UI w/ VAD, Opus support
+- Modular/swappable SRT, LLM, TTS servers
 
 [voicechat2 demo video](https://github.com/user-attachments/assets/498ce979-18b6-4225-b0da-01b6910e2bd7)
 
 <sup>*Unmute to hear the audio*</sup>
 
 On an 7900-class AMD RDNA3 card, voice-to-voice latency is in the 1 second range:
-- Whisper large-v2 (Q5)
-- Llama 3 8B (Q4_K_M)
+- [distil-whisper/distil-large-v2](https://huggingface.co/distil-whisper/distil-large-v2)
+- [bartowski/Meta-Llama-3.1-8B-Instruct-GGUF](https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF) (Q4_K_M)
 - tts_models/en/vctk/vits (Coqui TTS default VITS models)
 
 On a 4090, using [Faster Whisper](https://github.com/SYSTRAN/faster-whisper) with [faster-distil-whisper-large-v2](https://huggingface.co/Systran/faster-distil-whisper-large-v2) we can cut the latency down to as low as 300ms:  
 
 [voicechat2 demo](https://github.com/user-attachments/assets/5b8a3805-0116-4f7b-920d-231a2dbfb481)
+
+You can of course run any model or swap out any of the SRT, LLM, TTS components as you like. For a bit more about this project, see my [Hackster.io writeup](https://www.hackster.io/lhl/voicechat2-local-ai-voice-chat-4c48f2)
 
 # Install
 These installation instructions are for Ubuntu LTS and assume you've [setup your ROCm](https://rocm.docs.amd.com/projects/install-on-linux/en/latest/tutorial/quick-start.html) or [CUDA](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/) already.

@@ -1,5 +1,10 @@
 #!/bin/bash
 
+# path to your llm
+LLM_MODEL=llama.cpp/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf 
+LLM_CONTEXT=8192 # if you use Llama 3.1 and don't specify this it'll OOM
+
+
 # Check if byobu is installed
 if ! command -v byobu &> /dev/null; then
     echo "byobu is not installed. Please install it and try again."
@@ -20,16 +25,14 @@ byobu new-session -d -s voicechat2
 # FastAPI server (with Mamba activation)
 create_window "voicechat2" "mamba activate voicechat2 && uvicorn voicechat2:app --host 0.0.0.0 --port 8000 --reload"
 
-# SRT server (whisper.cpp)
-create_window "srt" "whisper.cpp/server -m whisper.cpp/models/ggml-large-v2.bin -pr --convert --host 127.0.0.1 --port 8001"
-# You could shave off 20% inference time w/ the Q5 quant
-# create_window "srt" "whisper.cpp/server -m whisper.cpp/models/ggml-large-v2-q5_0.bin -pr --convert --host 127.0.0.1 --port 8001"
+# SRT server (HF transformers w/ distil-whisper)
+create_window "voicechat2" "mamba activate voicechat2 && uvicorn srt-server:app --host 0.0.0.0 --port 8001 --reload"
 
 # LLM server (llama.cpp)
-create_window "llm" "llama.cpp/llama-server --host 127.0.0.1 --port 8002  -m llama.cpp/Meta-Llama-3-8B-Instruct-Q4_K_M.gguf -ngl 99"
+create_window "llm" "llama.cpp/llama-server --host 127.0.0.1 --port 8002 -m $LLM_MODEL -ngl 99 -c $LLM_CONTEXT"
 
 # TTS server (with Mamba activation)
-create_window "tts" "mamba activate voicechat2 && python tts-server.py"
+create_window "tts" "mamba activate voicechat2 && uvicorn tts-server:app --host 0.0.0.0 --port 8003"
 
 # Attach to the session
 byobu attach-session -t voicechat2

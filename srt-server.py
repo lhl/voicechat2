@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from loguru import logger
 from pydantic import BaseModel
 from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
+from transformers.utils import is_flash_attn_2_available
 from typing import Union
 from urllib.parse import unquote
 
@@ -24,6 +25,7 @@ class TransformersEngine(TranscriptionEngine):
         from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
+        # TODO: mps for mac
         torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
 
         # 400ms
@@ -50,6 +52,8 @@ class TransformersEngine(TranscriptionEngine):
             return_timestamps=True,
             torch_dtype=torch_dtype,
             device=device,
+            model_kwargs={"attn_implementation": "flash_attention_2"} if is_flash_attn_2_available() else {"attn_implementation": "sdpa"},
+
         )
 
     def transcribe(self, file, audio_content, **kwargs):

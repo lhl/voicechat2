@@ -11,3 +11,6 @@ opuslib
 mutagen
 torch
 torchaudio
+transformers
+optimum
+accelerate
