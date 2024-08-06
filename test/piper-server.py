@@ -35,7 +35,8 @@ Error: [ONNXRuntimeError] : 6 : RUNTIME_EXCEPTION : Non-zero status code returne
 untime/core/providers/cpu/tensor/reshape_helper.h:28 onnxruntime::ReshapeHelper::ReshapeHelper(const onnxruntime::TensorShape&, onnxruntime::TensorShapeVector&, bool) i
  < input_shape.NumDimensions() was false. The dimension with value zero exceeds the dimension size of the input tensor.
 
-also 
+
+RTF is about 0.01
 '''
 
 from piper import PiperVoice
