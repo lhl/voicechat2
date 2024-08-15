@@ -1,8 +1,11 @@
 # voicechat2
 A fast, fully local AI Voicechat using WebSockets
 - WebSocket server, allows for simple remote access
-- Default web UI w/ VAD, Opus support
+- Default web UI w/ VAD using [ricky0123/vad](https://github.com/ricky0123/vad), Opus support using [symblai/opus-encdec](https://github.com/symblai/opus-encdec)
 - Modular/swappable SRT, LLM, TTS servers
+  - SRT: [whisper.cpp](https://github.com/ggerganov/whisper.cpp), [faster-whisper](https://github.com/SYSTRAN/faster-whisper), or [HF Transformers whisper](https://huggingface.co/docs/transformers/en/model_doc/whisper)
+  - LLM: [llama.cpp](https://github.com/ggerganov/llama.cpp) or any OpenAI API compatible server
+  - TTS: [coqui-tts](https://github.com/idiap/coqui-ai-TTS), [StyleTTS2](https://github.com/yl4579/StyleTTS2), [Piper](https://github.com/rhasspy/piper), [MeloTTS](https://github.com/myshell-ai/MeloTTS)
 
 [voicechat2 demo video](https://github.com/user-attachments/assets/498ce979-18b6-4225-b0da-01b6910e2bd7)
 
@@ -72,6 +75,11 @@ local-tunnel.sh - connect to the GPU machine via a jump machine
 ```
 
 # Other AI Voicechat Projects
+
+## Speech To Speech
+A project released after voicechat2 that uses a similar modular approach but is local device oriented
+- https://github.com/eustlb/speech-to-speech
+- No license?
 
 ## webrtc-ai-voice-chat
 The demo shows a fair amount of latency (~10s) but this project isn't the closest to what we're doing (it uses WebRTC not websockets) from voicechat2 (HF Transformers, Ollama)
